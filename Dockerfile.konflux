@@ -1,0 +1,40 @@
+## Stage 1: Build the manager binary
+FROM registry.redhat.io/ubi9/go-toolset@sha256:83cfd595f20e494cea9dc6526f217441e60bb9c5da85b33157c761e5f6a3d852 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/main.go cmd/main.go
+COPY api/ api/
+COPY internal/ internal/
+COPY hack/ hack/
+COPY Makefile Makefile
+COPY PROJECT PROJECT
+
+USER root
+RUN make generate && \
+    CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -tags strictfipsruntime -a -ldflags="-s -w" -o manager cmd/main.go
+
+## Stage 2: Runtime
+FROM registry.redhat.io/ubi9-minimal@sha256:463cae32c6f6f5594b11a5c22de275016bd8545ce58a6373388e8b24f13fc15c
+
+WORKDIR /
+COPY --from=builder /workspace/manager .
+USER 65532:65532
+
+ENTRYPOINT ["/manager"]
+
+LABEL com.redhat.component="odh-workbenches-operator-rhel9 " \
+      name="rhoai/odh-workbenches-operator-rhel9 " \
+      description="odh-workbenches-operator" \
+      summary="odh-workbenches-operator" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-workbenches-operator" \
+      io.k8s.description="odh-workbenches-operator" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
