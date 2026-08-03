@@ -65,8 +65,17 @@ case "${platform_type}" in
         ;;
 esac
 
+# GNU realpath -m canonicalizes paths that may not exist yet; macOS/BSD realpath lacks -m.
+canonicalize_path() {
+    python3 -c 'import os, sys
+path = sys.argv[1]
+if not os.path.isabs(path):
+    path = os.path.join(os.getcwd(), path)
+print(os.path.normpath(path))' "$1"
+}
+
 # Resolve MANIFEST_DIR once so destination jail checks use a stable absolute prefix.
-MANIFEST_DIR="$(realpath -m "${MANIFEST_DIR}")"
+MANIFEST_DIR="$(canonicalize_path "${MANIFEST_DIR}")"
 
 # Parse command line overrides
 for arg in "$@"; do
@@ -142,14 +151,14 @@ fetch_manifests() {
     fi
 
     local resolved
-    resolved="$(realpath -m "${clone_dir}/${source_path}")"
+    resolved="$(canonicalize_path "${clone_dir}/${source_path}")"
     if [[ "${resolved}" != "${clone_dir}"/* ]]; then
         echo "ERROR: source_path '${source_path}' escapes clone directory"
         exit 1
     fi
 
     local dest
-    dest="$(realpath -m "${MANIFEST_DIR}/${target}")"
+    dest="$(canonicalize_path "${MANIFEST_DIR}/${target}")"
     if [[ "${dest}" != "${MANIFEST_DIR}" && "${dest}" != "${MANIFEST_DIR}"/* ]]; then
         echo "ERROR: target '${target}' escapes manifest directory '${MANIFEST_DIR}'"
         exit 1
