@@ -65,7 +65,13 @@ case "${platform_type}" in
         ;;
 esac
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required to canonicalize paths (macOS/BSD lack GNU realpath -m)"
+    exit 1
+fi
+
 # GNU realpath -m canonicalizes paths that may not exist yet; macOS/BSD realpath lacks -m.
+# Logical normalization only (like realpath -ms): resolves . and .. but not symlinks.
 canonicalize_path() {
     python3 -c 'import os, sys
 path = sys.argv[1]
@@ -130,7 +136,7 @@ fetch_manifests() {
 
     local repo_url="https://github.com/${org}/${repo}.git"
     local clone_dir
-    clone_dir="$(clone_dir_for "${org}" "${repo}" "${branch_sha}")"
+    clone_dir="$(canonicalize_path "$(clone_dir_for "${org}" "${repo}" "${branch_sha}")")"
 
     echo "Fetching ${target} from ${repo_url} (branch: ${branch}, sha: ${sha:-HEAD})"
 
