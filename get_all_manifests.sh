@@ -36,8 +36,8 @@ declare -A ODH_COMPONENT_MANIFESTS=(
 
 # RHOAI (downstream) Component Manifests
 declare -A RHOAI_COMPONENT_MANIFESTS=(
-    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.5@1998656679e96a2d4244dddce885ce3af5885cd2:components/notebook-controller/config"
-    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.5@1998656679e96a2d4244dddce885ce3af5885cd2:components/odh-notebook-controller/config"
+    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.5@2f2ed6c99ee4395f74a97ffb3b1c4f1dc6276d62:components/notebook-controller/config"
+    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.5@2f2ed6c99ee4395f74a97ffb3b1c4f1dc6276d62:components/odh-notebook-controller/config"
     ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.5@f4c02c2356f2e647e96617eb067cb77d2429c194:manifests"
 )
 
