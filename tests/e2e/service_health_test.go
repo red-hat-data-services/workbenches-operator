@@ -20,15 +20,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-// Single Ordered Describe ensures deterministic execution order across all
-// test areas. Each registerXxxTests function adds its Contexts to this
-// container and can live in its own file.
-var _ = Describe("Workbenches E2E", Ordered, func() {
-	registerLifecycleTests()
-	registerWebhookTests()
-	registerFinalizerTests()
-
-	AfterAll(func() {
-		deleteWorkbenchesCRAndWait()
+func registerServiceHealthTests() {
+	Context("Operand service reachability", Label("lifecycle"), func() {
+		It("Should have ready endpoints on all managed operand Services", func() {
+			waitForOperandServiceEndpoints()
+		})
 	})
-})
+}

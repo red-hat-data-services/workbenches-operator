@@ -11,3 +11,5 @@ spec:
   workbenchNamespace: opendatahub
   # Possible values: OpenDataHub, SelfManagedRhoai
   platform: OpenDataHub
+  workbenchesV2:
+    managementState: Managed

@@ -25,7 +25,18 @@ const (
 	WorkbenchesComponentName = "workbenches"
 	WorkbenchesInstanceName  = "default-" + WorkbenchesComponentName
 	WorkbenchesKind          = "Workbenches"
+
+	ManagementStateManaged = "Managed"
+	ManagementStateRemoved = "Removed"
 )
+
+// WorkbenchesV2Spec configures the workbenches-v2 submodule.
+type WorkbenchesV2Spec struct {
+	// managementState indicates whether the workbenches-v2 submodule should be deployed.
+	// +kubebuilder:default=Removed
+	// +kubebuilder:validation:Enum=Managed;Removed
+	ManagementState string `json:"managementState,omitempty"`
+}
 
 // WorkbenchesSpec defines the desired state of Workbenches.
 type WorkbenchesSpec struct {
@@ -68,6 +79,16 @@ type WorkbenchesSpec struct {
 	// mlflowEnabled indicates whether the MLflow integration is active.
 	// Projected by the orchestrator from DSC MLflowOperator state.
 	MLflowEnabled bool `json:"mlflowEnabled,omitempty"`
+
+	// workbenchesV2 configures the workbenches-v2 submodule.
+	// When omitted, workbenches-v2 is not deployed (equivalent to managementState: Removed).
+	// +optional
+	WorkbenchesV2 *WorkbenchesV2Spec `json:"workbenchesV2,omitempty"`
+}
+
+// IsWorkbenchesV2Managed reports whether workbenches-v2 is actively managed.
+func (s *WorkbenchesSpec) IsWorkbenchesV2Managed() bool {
+	return s.WorkbenchesV2 != nil && s.WorkbenchesV2.ManagementState == ManagementStateManaged
 }
 
 // ComponentRelease tracks release metadata for a deployed component.

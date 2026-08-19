@@ -62,7 +62,9 @@ const (
 	conditionTypeDeploymentsAvailable     = "DeploymentsAvailable"
 	conditionTypeReleaseMetadataAvailable = "ReleaseMetadataAvailable"
 	// ImageStreamsAvailable is informational only (matches ODH); it does not gate Ready.
-	conditionTypeImageStreamsAvailable  = "ImageStreamsAvailable"
+	conditionTypeImageStreamsAvailable = "ImageStreamsAvailable"
+	// WorkbenchesV2Ready is informational only; it does not gate Ready.
+	conditionTypeWorkbenchesV2Ready     = "WorkbenchesV2Ready"
 	conditionReasonImageStreamsNotReady = "ImageStreamsNotReady"
 	conditionReasonUnknown              = "Unknown"
 	conditionReasonAvailable            = "Available"
@@ -73,6 +75,8 @@ const (
 	rateLimiterMaxDelay  = 5 * time.Minute
 
 	workbenchesFinalizer = "components.platform.opendatahub.io/workbenches-cleanup"
+
+	workspacesControllerDeploymentName = "workspaces-controller"
 
 	paramGatewayURL    = "gateway-url"
 	paramMLflowEnabled = "mlflow-enabled"
@@ -106,6 +110,8 @@ type WorkbenchesReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=image.openshift.io,resources=imagestreams,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile handles the reconciliation loop for Workbenches resources.
 func (r *WorkbenchesReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -132,7 +138,7 @@ func (r *WorkbenchesReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	if workbenches.Spec.ManagementState == "Removed" {
+	if workbenches.Spec.ManagementState == componentsv1alpha1.ManagementStateRemoved {
 		return r.reconcileRemoved(ctx, workbenches)
 	}
 
@@ -361,7 +367,7 @@ func (r *WorkbenchesReconciler) reconcileRemoved(ctx context.Context, wb *compon
 	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
 		Type:               conditionTypeReady,
 		Status:             metav1.ConditionFalse,
-		Reason:             "Removed",
+		Reason:             componentsv1alpha1.ManagementStateRemoved,
 		Message:            "Workbenches component has been removed",
 		ObservedGeneration: wb.Generation,
 	})
@@ -369,7 +375,15 @@ func (r *WorkbenchesReconciler) reconcileRemoved(ctx context.Context, wb *compon
 	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
 		Type:               conditionTypeProvisioningSucceeded,
 		Status:             metav1.ConditionFalse,
-		Reason:             "Removed",
+		Reason:             componentsv1alpha1.ManagementStateRemoved,
+		Message:            "Workbenches component has been removed",
+		ObservedGeneration: wb.Generation,
+	})
+
+	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+		Type:               conditionTypeWorkbenchesV2Ready,
+		Status:             metav1.ConditionFalse,
+		Reason:             componentsv1alpha1.ManagementStateRemoved,
 		Message:            "Workbenches component has been removed",
 		ObservedGeneration: wb.Generation,
 	})
@@ -486,6 +500,8 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 	deploymentsReady, deployMsg := r.checkDeployments(ctx, wb)
 	r.setDeploymentCondition(wb, deploymentsReady, deployMsg)
 
+	r.setWorkbenchesV2Condition(ctx, wb)
+
 	if err = r.syncImageStreamsAvailable(ctx, wb, nsName); err != nil {
 		return r.setErrorStatus(ctx, wb, "ImageStreamsStatusFailed", err)
 	}
@@ -569,6 +585,89 @@ func (r *WorkbenchesReconciler) setDeploymentCondition(wb *componentsv1alpha1.Wo
 			ObservedGeneration: wb.Generation,
 		})
 	}
+}
+
+func (r *WorkbenchesReconciler) setWorkbenchesV2Condition(ctx context.Context, wb *componentsv1alpha1.Workbenches) {
+	if !wb.Spec.IsWorkbenchesV2Managed() {
+		meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+			Type:               conditionTypeWorkbenchesV2Ready,
+			Status:             metav1.ConditionFalse,
+			Reason:             componentsv1alpha1.ManagementStateRemoved,
+			Message:            "workbenches-v2 submodule is not enabled",
+			ObservedGeneration: wb.Generation,
+		})
+
+		return
+	}
+
+	if !r.workbenchesV2ManifestsExist() {
+		meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+			Type:               conditionTypeWorkbenchesV2Ready,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ManifestsNotAvailable",
+			Message:            "workbenches-v2 manifests are not available in this operator build",
+			ObservedGeneration: wb.Generation,
+		})
+
+		return
+	}
+
+	ready, msg := r.checkWorkspacesControllerDeployment(ctx, wb)
+	if !ready {
+		meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+			Type:               conditionTypeWorkbenchesV2Ready,
+			Status:             metav1.ConditionFalse,
+			Reason:             "Unavailable",
+			Message:            msg,
+			ObservedGeneration: wb.Generation,
+		})
+
+		return
+	}
+
+	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+		Type:               conditionTypeWorkbenchesV2Ready,
+		Status:             metav1.ConditionTrue,
+		Reason:             conditionReasonAvailable,
+		Message:            "workspaces-controller deployment is available",
+		ObservedGeneration: wb.Generation,
+	})
+}
+
+// checkWorkspacesControllerDeployment reports whether the workspaces-controller
+// Deployment (rendered from the workbenches-v2 gateway overlay) exists and has
+// its desired replicas ready.
+func (r *WorkbenchesReconciler) checkWorkspacesControllerDeployment(
+	ctx context.Context,
+	wb *componentsv1alpha1.Workbenches,
+) (bool, string) {
+	l := log.FromContext(ctx)
+	nsName := r.resolveOperandNamespace(wb.Spec.Platform)
+
+	deployments := &appsv1.DeploymentList{}
+
+	err := r.List(ctx, deployments, client.InNamespace(nsName), client.MatchingLabels{
+		metadata.ComponentLabelKey: metadata.LabelTrue,
+	})
+	if err != nil {
+		l.V(1).Info("failed to list deployments for workspaces-controller", "error", err)
+
+		return false, fmt.Sprintf("failed to list deployments: %v", err)
+	}
+
+	var v2Deployments []appsv1.Deployment
+
+	for _, d := range deployments.Items {
+		if d.Name == workspacesControllerDeploymentName {
+			v2Deployments = append(v2Deployments, d)
+		}
+	}
+
+	if len(v2Deployments) == 0 {
+		return false, "workspaces-controller deployment not found"
+	}
+
+	return deploymentsAvailability(v2Deployments)
 }
 
 func (r *WorkbenchesReconciler) resolveDesiredDistribution(

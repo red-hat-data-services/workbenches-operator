@@ -118,6 +118,7 @@ prefetched manifests for that release branch.
 | `workbenches/kf-notebook-controller` | `opendatahub-io/kubeflow` | `main` | `components/notebook-controller/config` |
 | `workbenches/odh-notebook-controller` | `opendatahub-io/kubeflow` | `main` | `components/odh-notebook-controller/config` |
 | `workbenches/notebooks` | `opendatahub-io/notebooks` | `main` | `manifests` |
+| `workbenches/workspaces-controller` | `opendatahub-io/workbenches` | `main` | `workspaces/controller/manifests/kustomize` |
 
 ### RHOAI (downstream) sources
 
@@ -126,6 +127,7 @@ prefetched manifests for that release branch.
 | `workbenches/kf-notebook-controller` | `red-hat-data-services/kubeflow` | `main` | `components/notebook-controller/config` |
 | `workbenches/odh-notebook-controller` | `red-hat-data-services/kubeflow` | `main` | `components/odh-notebook-controller/config` |
 | `workbenches/notebooks` | `red-hat-data-services/notebooks` | `main` | `manifests` |
+| `workbenches/workspaces-controller` | `red-hat-data-services/workbenches` | `main` | `workspaces/controller/manifests/kustomize` |
 
 To pin manifests to a specific commit, update the ref field to include a SHA:
 

@@ -103,6 +103,20 @@ spec:
                 x-kubernetes-validations:
                 - message: workbenchNamespace is immutable
                   rule: self == oldSelf
+              workbenchesV2:
+                description: |-
+                  workbenchesV2 configures the workbenches-v2 submodule.
+                  When omitted, workbenches-v2 is not deployed (equivalent to managementState: Removed).
+                properties:
+                  managementState:
+                    default: Removed
+                    description: managementState indicates whether the workbenches-v2
+                      submodule should be deployed.
+                    enum:
+                    - Managed
+                    - Removed
+                    type: string
+                type: object
             type: object
           status:
             description: WorkbenchesStatus defines the observed state of Workbenches.

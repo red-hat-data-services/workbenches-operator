@@ -55,18 +55,31 @@ const (
 // ManifestsBasePath) for the given platform type. The OpenShift overlay is
 // always used for kf-notebook-controller because the operator only runs on
 // OpenShift (both ODH and RHOAI). The notebooks overlay varies by platform.
-func manifestGroupsForPlatform(platformType string) []string {
+func manifestGroupsForPlatform(platformType string, workbenchesV2Managed bool) []string {
 	notebooksOverlay := "workbenches/notebooks/odh/base"
 
 	if platformType == platform.SelfManagedRhoai {
 		notebooksOverlay = "workbenches/notebooks/rhoai/base"
 	}
 
-	return []string{
+	groups := []string{
 		"workbenches/kf-notebook-controller/overlays/openshift",
 		"workbenches/odh-notebook-controller/base",
 		notebooksOverlay,
 	}
+
+	if workbenchesV2Managed {
+		groups = append(groups, "workbenches/workspaces-controller/overlays/gateway")
+	}
+
+	return groups
+}
+
+func (r *WorkbenchesReconciler) workbenchesV2ManifestsExist() bool {
+	v2Dir := filepath.Join(r.ManifestsBasePath, "workbenches", "workspaces-controller", "overlays", "gateway")
+	info, err := os.Stat(v2Dir)
+
+	return err == nil && info.IsDir()
 }
 
 // renderAndApply renders the upstream kustomize manifests with parameter injection
@@ -103,7 +116,7 @@ func (r *WorkbenchesReconciler) renderAndApply(
 		return fmt.Errorf("failed to copy manifests tree: %w", err)
 	}
 
-	groups := manifestGroupsForPlatform(platformType)
+	groups := manifestGroupsForPlatform(platformType, owner.Spec.IsWorkbenchesV2Managed())
 	desired := make(map[objectRef]struct{})
 
 	for _, group := range groups {

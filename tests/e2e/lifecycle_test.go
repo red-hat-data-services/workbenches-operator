@@ -37,9 +37,15 @@ func registerLifecycleTests() {
 	registerComponentLifecycleTests()
 	registerStatusConditionTests()
 	registerCELImmutabilityTests()
+	registerReleaseMetadataTests()
+	registerImageStreamStatusTests()
+	registerMLflowIntegrationTests()
 	registerDriftRecoveryTests()
-	registerManagementStateTests()
 	registerOperandHealthTests()
+	registerPlatformConfigTests()
+	registerServiceHealthTests()
+	registerUpgradeTests()
+	registerManagementStateTests()
 }
 
 func registerOperatorDeploymentTests() {
@@ -160,45 +166,56 @@ func registerCELImmutabilityTests() {
 
 func registerDriftRecoveryTests() {
 	Context("Drift recovery", Label("lifecycle"), func() {
-		It("Should recreate a deleted Deployment on next reconcile", func() {
+		It("Should recreate deleted Deployments on next reconcile", func() {
 			list := &appsv1.DeploymentList{}
-			expectDriftRecovery("deployment", list,
-				func() client.Object {
-					if len(list.Items) == 0 {
-						return nil
+			expectDriftRecoveryAll("Deployment", list,
+				func() []client.Object {
+					items := make([]client.Object, 0, len(list.Items))
+
+					for i := range list.Items {
+						items = append(items, list.Items[i].DeepCopy())
 					}
 
-					return list.Items[0].DeepCopy()
+					return items
 				},
 				func() client.Object { return &appsv1.Deployment{} },
+				nil,
 			)
 		})
 
-		It("Should recreate a deleted ConfigMap on next reconcile", func() {
+		It("Should recreate deleted ConfigMaps on next reconcile", func() {
 			list := &corev1.ConfigMapList{}
-			expectDriftRecovery("ConfigMap", list,
-				func() client.Object {
-					if len(list.Items) == 0 {
-						return nil
+			expectDriftRecoveryAll("ConfigMap", list,
+				func() []client.Object {
+					items := make([]client.Object, 0, len(list.Items))
+
+					for i := range list.Items {
+						items = append(items, list.Items[i].DeepCopy())
 					}
 
-					return list.Items[0].DeepCopy()
+					return items
 				},
 				func() client.Object { return &corev1.ConfigMap{} },
+				func(obj client.Object) bool {
+					return skipKustomizeGeneratedConfigMap(obj.GetName())
+				},
 			)
 		})
 
-		It("Should recreate a deleted Service on next reconcile", func() {
+		It("Should recreate deleted Services on next reconcile", func() {
 			list := &corev1.ServiceList{}
-			expectDriftRecovery("Service", list,
-				func() client.Object {
-					if len(list.Items) == 0 {
-						return nil
+			expectDriftRecoveryAll("Service", list,
+				func() []client.Object {
+					items := make([]client.Object, 0, len(list.Items))
+
+					for i := range list.Items {
+						items = append(items, list.Items[i].DeepCopy())
 					}
 
-					return list.Items[0].DeepCopy()
+					return items
 				},
 				func() client.Object { return &corev1.Service{} },
+				nil,
 			)
 		})
 	})
@@ -214,6 +231,31 @@ func registerManagementStateTests() {
 			waitForPhase("Failed")
 			waitForCondition("Ready", metav1.ConditionFalse)
 			waitForCondition("ProvisioningSucceeded", metav1.ConditionFalse)
+		})
+
+		It("Should remove labeled operand deployments when management state is Removed", func() {
+			Expect(operandNamespace).NotTo(BeEmpty())
+
+			Eventually(func(g Gomega) {
+				deploys := &appsv1.DeploymentList{}
+				g.Expect(k8sClient.List(ctx, deploys,
+					client.InNamespace(operandNamespace),
+					managedResourceLabels(),
+				)).To(Succeed())
+				g.Expect(deploys.Items).To(BeEmpty(),
+					"component-labeled deployments should be removed in Removed state")
+			}, timeout, interval).Should(Succeed())
+		})
+
+		It("Should remove all managed operand resource types when management state is Removed", func() {
+			expectNoManagedOperandResources()
+		})
+
+		It("Should clear status.releases when management state is Removed", func() {
+			Eventually(func(g Gomega) {
+				wb := getWorkbenches()
+				g.Expect(wb.Status.Releases).To(BeEmpty())
+			}, timeout, interval).Should(Succeed())
 		})
 	})
 

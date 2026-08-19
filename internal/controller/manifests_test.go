@@ -66,7 +66,7 @@ func TestManifestGroupsForPlatform(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			groups := manifestGroupsForPlatform(tt.platformType)
+			groups := manifestGroupsForPlatform(tt.platformType, false)
 			if len(groups) != 3 {
 				t.Fatalf("expected 3 groups, got %d", len(groups))
 			}
@@ -81,6 +81,36 @@ func TestManifestGroupsForPlatform(t *testing.T) {
 
 			if groups[2] != tt.wantNotebooks {
 				t.Errorf("notebooks group = %q, want %q", groups[2], tt.wantNotebooks)
+			}
+		})
+	}
+}
+
+func TestManifestGroupsForPlatformWithWorkbenchesV2(t *testing.T) {
+	tests := []struct {
+		name         string
+		platformType string
+		wantCount    int
+		wantV2       string
+	}{
+		{"ODH with v2 enabled", platform.OpenDataHub, 4, "workbenches/workspaces-controller/overlays/gateway"},
+		{"RHOAI with v2 enabled", platform.SelfManagedRhoai, 4, "workbenches/workspaces-controller/overlays/gateway"},
+		{"ODH with v2 disabled", platform.OpenDataHub, 3, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v2Managed := tt.wantCount == 4
+			groups := manifestGroupsForPlatform(tt.platformType, v2Managed)
+
+			if len(groups) != tt.wantCount {
+				t.Fatalf("expected %d groups, got %d", tt.wantCount, len(groups))
+			}
+
+			if v2Managed {
+				if groups[3] != tt.wantV2 {
+					t.Errorf("v2 group = %q, want %q", groups[3], tt.wantV2)
+				}
 			}
 		})
 	}
@@ -1150,40 +1180,47 @@ func TestRenderRealManifests(t *testing.T) {
 			name = "empty"
 		}
 
-		t.Run(name, func(t *testing.T) {
-			groups := manifestGroupsForPlatform(p)
-
-			workDir := t.TempDir()
-			srcRoot := filepath.Join(basePath, "workbenches")
-			dstRoot := filepath.Join(workDir, "workbenches")
-
-			if err := copyDir(srcRoot, dstRoot); err != nil {
-				t.Fatalf("copyDir() failed: %v", err)
+		for _, v2Managed := range []bool{false, true} {
+			testName := name
+			if v2Managed {
+				testName += "-workbenchesV2Managed"
 			}
 
-			for _, group := range groups {
-				t.Run(filepath.Base(group), func(t *testing.T) {
-					srcDir := filepath.Join(basePath, group)
+			t.Run(testName, func(t *testing.T) {
+				groups := manifestGroupsForPlatform(p, v2Managed)
 
-					if _, statErr := os.Stat(srcDir); os.IsNotExist(statErr) {
-						t.Fatalf("manifest group directory does not exist: %s", srcDir)
-					}
+				workDir := t.TempDir()
+				srcRoot := filepath.Join(basePath, "workbenches")
+				dstRoot := filepath.Join(workDir, "workbenches")
 
-					renderDir := filepath.Join(workDir, group)
+				if err := copyDir(srcRoot, dstRoot); err != nil {
+					t.Fatalf("copyDir() failed: %v", err)
+				}
 
-					objects, err := renderKustomize(renderDir, params)
-					if err != nil {
-						t.Fatalf("renderKustomize(%s) failed: %v", group, err)
-					}
+				for _, group := range groups {
+					t.Run(filepath.Base(group), func(t *testing.T) {
+						srcDir := filepath.Join(basePath, group)
 
-					if len(objects) == 0 {
-						t.Errorf("renderKustomize(%s) produced 0 objects", group)
-					}
+						if _, statErr := os.Stat(srcDir); os.IsNotExist(statErr) {
+							t.Fatalf("manifest group directory does not exist: %s", srcDir)
+						}
 
-					t.Logf("rendered %d objects", len(objects))
-				})
-			}
-		})
+						renderDir := filepath.Join(workDir, group)
+
+						objects, err := renderKustomize(renderDir, params)
+						if err != nil {
+							t.Fatalf("renderKustomize(%s) failed: %v", group, err)
+						}
+
+						if len(objects) == 0 {
+							t.Errorf("renderKustomize(%s) produced 0 objects", group)
+						}
+
+						t.Logf("rendered %d objects", len(objects))
+					})
+				}
+			})
+		}
 	}
 }
 
@@ -1207,7 +1244,7 @@ func TestComponentLabelsConsistencyInRealManifests(t *testing.T) {
 
 	for _, p := range []string{platform.OpenDataHub, platform.SelfManagedRhoai} {
 		t.Run(p, func(t *testing.T) {
-			groups := manifestGroupsForPlatform(p)
+			groups := manifestGroupsForPlatform(p, false)
 
 			workDir := t.TempDir()
 			if err := copyDir(filepath.Join(basePath, "workbenches"), filepath.Join(workDir, "workbenches")); err != nil {

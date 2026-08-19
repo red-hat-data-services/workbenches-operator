@@ -113,9 +113,10 @@ Key spec fields:
 - `workbenchNamespace`: legacy JupyterHub-era notebooks namespace (immutable); ensured on reconcile; **not** the operand deploy target
 - `platform`: `OpenDataHub` or `SelfManagedRhoai`
 - `gatewayDomain`, `mlflowEnabled`: projected by the orchestrator
+- `workbenchesV2`: optional submodule config (`*WorkbenchesV2Spec`); contains `managementState` (default `Removed`). When nil or Removed, workbenches-v2 manifests are not deployed. When `Managed`, deploys from `workbenches/workspaces-controller/overlays/gateway`.
 
 Status:
-- Conditions: `Ready`, `ProvisioningSucceeded`, `DeploymentsAvailable`, `Degraded`, `ReleaseMetadataAvailable`
+- Conditions: `Ready`, `ProvisioningSucceeded`, `DeploymentsAvailable`, `Degraded`, `ReleaseMetadataAvailable`, `WorkbenchesV2Ready`
 - `phase`: `Pending` | `Initializing` | `Ready` | `Upgrading` | `Degraded` | `Failed`
 - `distribution`: `name` (`OpenDataHub` | `SelfManagedRHOAI` | `Standalone`) + `version`
 - `releases[]`, `observedGeneration`
