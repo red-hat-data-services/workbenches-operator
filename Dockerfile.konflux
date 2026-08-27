@@ -1,5 +1,5 @@
 ## Stage 1: Build the manager binary
-FROM registry.redhat.io/ubi9/go-toolset@sha256:71e89a1a51ab32cc30634d89ee4dc8ea40ad9991057fa1eae3b1af32bc7db73f AS builder
+FROM registry.redhat.io/ubi9/go-toolset@sha256:1a755651ffe1a438f137418d183f18ebad527ec929206c17804f93490a97869e AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -17,7 +17,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -tags strictfipsruntime -a -ldflags="-s -w" -o manager cmd/main.go
 
 ## Stage 2: Runtime
-FROM registry.redhat.io/ubi9-minimal@sha256:8eb2830d0936237fc13a1f2f7e45aecf90d69043380ad167fad0343632937f41
+FROM registry.redhat.io/ubi9-minimal@sha256:580752f96d36c4132bffd30f9c34865bf4bd87f6aa161c969d117f21732e50f7
 
 WORKDIR /
 COPY --from=builder /workspace/manager .

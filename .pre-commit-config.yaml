@@ -2,8 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Fetched by get_all_manifests.sh; do not rewrite upstream whitespace/EOF.
       - id: trailing-whitespace
+        exclude: ^opt/manifests/
       - id: end-of-file-fixer
+        exclude: ^opt/manifests/
       - id: check-yaml
         args: [--allow-multiple-documents]
         exclude: ^charts/.*/templates/
