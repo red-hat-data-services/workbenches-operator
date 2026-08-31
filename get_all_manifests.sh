@@ -81,6 +81,12 @@ case "${platform_type}" in
         ;;
 esac
 
+# Paths under ${MANIFEST_DIR} that are owned by workbenches-operator and are NOT
+# fetched from upstream component repos. They are preserved across manifest refresh.
+OPERATOR_OWNED_MANIFESTS=(
+    "workbenches/workspacekinds"
+)
+
 if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: python3 is required to canonicalize paths (macOS/BSD lack GNU realpath -m)"
     exit 1
@@ -115,7 +121,39 @@ for arg in "$@"; do
 done
 
 TMPDIR=$(mktemp -d)
-trap 'rm -rf "${TMPDIR}"' EXIT
+PRESERVE_DIR="${TMPDIR}/operator-owned-manifests"
+MANIFEST_DIR_WIPED=0
+
+restore_operator_owned_manifests() {
+    [[ "${MANIFEST_DIR_WIPED}" -eq 1 ]] || return 0
+    for rel in "${OPERATOR_OWNED_MANIFESTS[@]}"; do
+        preserved="${PRESERVE_DIR}/${rel}"
+        if [[ -d "${preserved}" ]]; then
+            dest="${MANIFEST_DIR}/${rel}"
+            mkdir -p "$(dirname "${dest}")"
+            cp -a "${preserved}/." "${dest}/"
+            echo "  -> restored ${dest}"
+        fi
+    done
+}
+
+cleanup() {
+    restore_operator_owned_manifests
+    rm -rf "${TMPDIR}"
+}
+
+trap cleanup EXIT
+
+mkdir -p "${PRESERVE_DIR}"
+for rel in "${OPERATOR_OWNED_MANIFESTS[@]}"; do
+    src="${MANIFEST_DIR}/${rel}"
+    if [[ -d "${src}" ]]; then
+        dest_dir="${PRESERVE_DIR}/$(dirname "${rel}")"
+        mkdir -p "${dest_dir}"
+        cp -a "${src}" "${dest_dir}/"
+        echo "Preserving operator-owned manifests: ${rel}"
+    fi
+done
 
 # Collision-safe directory name for a given org/repo/ref.
 clone_dir_for() {
@@ -192,6 +230,7 @@ fetch_manifests() {
 echo "Cleaning up ${MANIFEST_DIR}..."
 rm -rf "${MANIFEST_DIR:?}"
 mkdir -p "${MANIFEST_DIR}"
+MANIFEST_DIR_WIPED=1
 
 for target in "${!COMPONENT_MANIFESTS[@]}"; do
     fetch_manifests "${target}" "${COMPONENT_MANIFESTS[${target}]}"

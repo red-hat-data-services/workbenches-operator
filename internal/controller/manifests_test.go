@@ -88,19 +88,32 @@ func TestManifestGroupsForPlatform(t *testing.T) {
 
 func TestManifestGroupsForPlatformWithWorkbenchesV2(t *testing.T) {
 	tests := []struct {
-		name         string
-		platformType string
-		wantCount    int
-		wantV2       string
+		name              string
+		platformType      string
+		wantCount         int
+		wantV2            string
+		wantWorkspaceKind string
 	}{
-		{"ODH with v2 enabled", platform.OpenDataHub, 4, "workbenches/workspaces-controller/overlays/gateway"},
-		{"RHOAI with v2 enabled", platform.SelfManagedRhoai, 4, "workbenches/workspaces-controller/overlays/gateway"},
-		{"ODH with v2 disabled", platform.OpenDataHub, 3, ""},
+		{
+			"ODH with v2 enabled",
+			platform.OpenDataHub,
+			5,
+			"workbenches/workspaces-controller/overlays/gateway",
+			"workbenches/workspacekinds/odh",
+		},
+		{
+			"RHOAI with v2 enabled",
+			platform.SelfManagedRhoai,
+			5,
+			"workbenches/workspaces-controller/overlays/gateway",
+			"workbenches/workspacekinds/rhoai",
+		},
+		{"ODH with v2 disabled", platform.OpenDataHub, 3, "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v2Managed := tt.wantCount == 4
+			v2Managed := tt.wantCount == 5
 			groups := manifestGroupsForPlatform(tt.platformType, v2Managed)
 
 			if len(groups) != tt.wantCount {
@@ -110,6 +123,10 @@ func TestManifestGroupsForPlatformWithWorkbenchesV2(t *testing.T) {
 			if v2Managed {
 				if groups[3] != tt.wantV2 {
 					t.Errorf("v2 group = %q, want %q", groups[3], tt.wantV2)
+				}
+
+				if groups[4] != tt.wantWorkspaceKind {
+					t.Errorf("workspacekinds group = %q, want %q", groups[4], tt.wantWorkspaceKind)
 				}
 			}
 		})
@@ -451,6 +468,77 @@ func TestSetComponentLabels(t *testing.T) {
 	})
 }
 
+func TestPrepareRenderedObjects(t *testing.T) {
+	tests := []struct {
+		name     string
+		objects  []*unstructured.Unstructured
+		wantLen  int
+		wantKind string
+		wantNS   string
+	}{
+		{
+			name: "drops workspacekind image params configmap",
+			objects: []*unstructured.Unstructured{
+				{Object: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name": workspaceKindImageParamsConfigMap,
+					},
+				}},
+				{Object: map[string]any{
+					"apiVersion": "kubeflow.org/v1beta1",
+					"kind":       "WorkspaceKind",
+					"metadata": map[string]any{
+						"name":      "jupyterlab",
+						"namespace": "redhat-ods-applications",
+					},
+				}},
+			},
+			wantLen:  1,
+			wantKind: "WorkspaceKind",
+			wantNS:   "",
+		},
+		{
+			name: "keeps other configmaps",
+			objects: []*unstructured.Unstructured{
+				{Object: map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name":      "workbench-params",
+						"namespace": "redhat-ods-applications",
+					},
+				}},
+			},
+			wantLen:  1,
+			wantKind: "ConfigMap",
+			wantNS:   "redhat-ods-applications",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := prepareRenderedObjects(tt.objects)
+			if len(got) != tt.wantLen {
+				t.Fatalf("prepareRenderedObjects() len = %d, want %d", len(got), tt.wantLen)
+			}
+
+			if tt.wantLen == 0 {
+				return
+			}
+
+			if got[0].GetKind() != tt.wantKind {
+				t.Errorf("kind = %q, want %q", got[0].GetKind(), tt.wantKind)
+			}
+
+			if got[0].GetNamespace() != tt.wantNS {
+				t.Errorf("namespace = %q, want %q", got[0].GetNamespace(), tt.wantNS)
+			}
+		})
+	}
+}
+
 func TestIsNamespaced(t *testing.T) {
 	tests := []struct {
 		kind     string
@@ -466,6 +554,7 @@ func TestIsNamespaced(t *testing.T) {
 		{"CustomResourceDefinition", false},
 		{"MutatingWebhookConfiguration", false},
 		{"ValidatingWebhookConfiguration", false},
+		{"WorkspaceKind", false},
 	}
 
 	for _, tt := range tests {
