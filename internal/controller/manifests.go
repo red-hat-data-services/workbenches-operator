@@ -46,9 +46,10 @@ import (
 )
 
 const (
-	fieldOwner     = "workbenches-operator"
-	kindDeployment = "Deployment"
-	kindService    = "Service"
+	fieldOwner                        = "workbenches-operator"
+	kindDeployment                    = "Deployment"
+	kindService                       = "Service"
+	workspaceKindImageParamsConfigMap = "workspacekind-image-params"
 )
 
 // manifestGroupsForPlatform returns the kustomize root paths (relative to
@@ -70,6 +71,13 @@ func manifestGroupsForPlatform(platformType string, workbenchesV2Managed bool) [
 
 	if workbenchesV2Managed {
 		groups = append(groups, "workbenches/workspaces-controller/overlays/gateway")
+
+		workspacekindsOverlay := "workbenches/workspacekinds/odh"
+		if platformType == platform.SelfManagedRhoai {
+			workspacekindsOverlay = "workbenches/workspacekinds/rhoai"
+		}
+
+		groups = append(groups, workspacekindsOverlay)
 	}
 
 	return groups
@@ -128,14 +136,18 @@ func (r *WorkbenchesReconciler) renderAndApply(
 			continue
 		}
 
-		if err := patchKustomizeNamespace(renderDir, namespace, l); err != nil {
-			return fmt.Errorf("failed to patch kustomize namespace for %s: %w", group, err)
+		if !strings.Contains(group, "workspacekinds/") {
+			if err := patchKustomizeNamespace(renderDir, namespace, l); err != nil {
+				return fmt.Errorf("failed to patch kustomize namespace for %s: %w", group, err)
+			}
 		}
 
 		objects, err := renderKustomize(renderDir, params)
 		if err != nil {
 			return fmt.Errorf("failed to render manifests for %s: %w", group, err)
 		}
+
+		objects = prepareRenderedObjects(objects)
 
 		l.Info("rendered manifests", "group", group, "count", len(objects))
 
@@ -194,6 +206,10 @@ func copyDir(src, dst string) error {
 func renderKustomize(kustomizeDir string, params map[string]string) ([]*unstructured.Unstructured, error) {
 	fSys := filesys.MakeFsOnDisk()
 
+	if err := stageWorkspaceKindImageParams(fSys, kustomizeDir); err != nil {
+		return nil, fmt.Errorf("failed to stage workspacekind image params: %w", err)
+	}
+
 	if err := ensureKustomization(fSys, kustomizeDir); err != nil {
 		return nil, fmt.Errorf("failed to ensure kustomization: %w", err)
 	}
@@ -236,6 +252,67 @@ func renderKustomize(kustomizeDir string, params map[string]string) ([]*unstruct
 	}
 
 	return objects, nil
+}
+
+// prepareRenderedObjects drops kustomize-only build artifacts and normalizes
+// cluster-scoped resources before apply. workspacekinds overlays use a generated
+// ConfigMap only to drive replacements during kustomize build; it must not be
+// applied to the cluster.
+func prepareRenderedObjects(objects []*unstructured.Unstructured) []*unstructured.Unstructured {
+	prepared := make([]*unstructured.Unstructured, 0, len(objects))
+
+	for _, obj := range objects {
+		if obj.GetKind() == "ConfigMap" && obj.GetName() == workspaceKindImageParamsConfigMap {
+			continue
+		}
+
+		if clusterScopedKinds[obj.GetKind()] {
+			obj.SetNamespace("")
+		}
+
+		prepared = append(prepared, obj)
+	}
+
+	return prepared
+}
+
+// stageWorkspaceKindImageParams copies notebooks params.env / params-latest.env into a
+// workspacekinds overlay directory before kustomize build. Kustomize only allows
+// configMapGenerator env sources under the kustomization root; workspacekinds overlays
+// reference the same keys as notebook ImageStreams. RELATED_IMAGE_* overrides are
+// applied to the notebooks copies earlier in the same render pass (notebooks group
+// is rendered before workspacekinds).
+func stageWorkspaceKindImageParams(fSys filesys.FileSystem, kustomizeDir string) error {
+	if !strings.Contains(filepath.ToSlash(kustomizeDir), "workspacekinds/") {
+		return nil
+	}
+
+	platform := "odh"
+	if strings.Contains(filepath.ToSlash(kustomizeDir), "workspacekinds/rhoai") {
+		platform = "rhoai"
+	}
+
+	workbenchesRoot := filepath.Dir(filepath.Dir(kustomizeDir))
+	notebooksBase := filepath.Join(workbenchesRoot, "notebooks", platform, "base")
+
+	for _, name := range paramsEnvFiles {
+		src := filepath.Join(notebooksBase, name)
+		if !fSys.Exists(src) {
+			continue
+		}
+
+		data, err := fSys.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", src, err)
+		}
+
+		dst := filepath.Join(kustomizeDir, name)
+		if err := fSys.WriteFile(dst, data); err != nil {
+			return fmt.Errorf("writing %s: %w", dst, err)
+		}
+	}
+
+	return nil
 }
 
 // writeParamsEnv merges operator parameters into the existing params.env file.
@@ -450,6 +527,7 @@ var clusterScopedKinds = map[string]bool{
 	"CustomResourceDefinition":       true,
 	"MutatingWebhookConfiguration":   true,
 	"ValidatingWebhookConfiguration": true,
+	"WorkspaceKind":                  true,
 }
 
 // skipOwnerRefKinds are never owned by the Workbenches CR.
@@ -554,6 +632,7 @@ var cleanupClusterGVKs = []schema.GroupVersionKind{
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"},
 	{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfiguration"},
 	{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration"},
+	{Group: "kubeflow.org", Version: "v1beta1", Kind: "WorkspaceKind"},
 }
 
 // objectRef uniquely identifies a managed resource for desired-set GC.

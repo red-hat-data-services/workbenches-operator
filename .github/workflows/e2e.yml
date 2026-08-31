@@ -109,7 +109,18 @@ jobs:
 
       - name: Install CRDs (kustomize)
         if: matrix.deploy-method == 'kustomize'
-        run: make install
+        run: |
+          make kustomize controller-gen
+          for attempt in 1 2 3; do
+            make install && exit 0
+            if [[ "${attempt}" -lt 3 ]]; then
+              echo "make install failed (attempt ${attempt}/3), retrying..."
+              sleep 15
+            else
+              echo "make install failed after 3 attempts"
+            fi
+          done
+          exit 1
 
       - name: Deploy operator with webhooks (kustomize)
         if: matrix.deploy-method == 'kustomize'

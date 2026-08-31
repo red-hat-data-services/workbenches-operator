@@ -1,0 +1,308 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Image refs from notebooks params.env / params-latest.env (same keys as ImageStreams).
+# params.env / params-latest.env are copied from notebooks/{odh|rhoai}/base at render
+# time (see stageWorkspaceKindImageParams). RELATED_IMAGE_* overrides are applied to
+# the notebooks copies before workspacekinds renders.
+
+resources:
+- jupyterlab_v1beta1_workspacekind.yaml
+- codeserver_v1beta1_workspacekind.yaml
+
+configMapGenerator:
+- envs:
+  - params.env
+  - params-latest.env
+  name: workspacekind-image-params
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+replacements:
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-cpu-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.0.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.1.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-cuda-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.2.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.3.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-rocm-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.4.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.5.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-datascience-cpu-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.6.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.7.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-cuda-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.8.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.9.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.10.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.11.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-rocm-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.12.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-pytorch-rocm-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.13.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.14.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.15.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.16.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.17.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-trustyai-cpu-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.18.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-jupyter-trustyai-cpu-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.19.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: jupyterlab
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-codeserver-datascience-cpu-py312-ubi9-n
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.0.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: codeserver
+      version: v1beta1
+- source:
+    fieldPath: data.odh-workbench-codeserver-datascience-cpu-py312-ubi9-3-5
+    kind: ConfigMap
+    name: workspacekind-image-params
+    version: v1
+  targets:
+  - fieldPaths:
+    - spec.podTemplate.options.imageConfig.values.1.spec.image
+    select:
+      group: kubeflow.org
+      kind: WorkspaceKind
+      name: codeserver
+      version: v1beta1
