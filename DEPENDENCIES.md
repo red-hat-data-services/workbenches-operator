@@ -120,6 +120,12 @@ prefetched manifests for that release branch.
 | `workbenches/notebooks` | `opendatahub-io/notebooks` | `main` | `manifests` |
 | `workbenches/workspaces-controller` | `opendatahub-io/workbenches` | `main` | `workspaces/controller/manifests/kustomize` |
 
+Operator-owned paths under `opt/manifests/` (preserved across refresh, not fetched from upstream):
+
+| Target | Notes |
+|--------|-------|
+| `workbenches/workspacekinds` | Deployable ODH/RHOAI WorkspaceKind manifests for workbenches v2 |
+
 ### RHOAI (downstream) sources
 
 | Target | Source Repository | Branch | Source Path |

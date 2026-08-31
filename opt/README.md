@@ -2,7 +2,9 @@
 
 This directory contains component manifests fetched by `get_all_manifests.sh`.
 
-**Do not edit files under `opt/manifests/` manually.**
+**Do not edit fetched files under `opt/manifests/` manually.**
+
+Exception: `opt/manifests/workbenches/workspacekinds/` is operator-owned (not fetched from upstream) and is preserved when `get_all_manifests.sh` runs. Edit those WorkspaceKind manifests in this repository.
 
 Manifests are refreshed automatically by the scheduled GitHub Action (`.github/workflows/manifest-sync.yaml`) or locally via:
 
