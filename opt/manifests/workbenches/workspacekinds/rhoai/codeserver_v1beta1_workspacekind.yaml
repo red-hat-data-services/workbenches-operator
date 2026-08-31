@@ -1,0 +1,247 @@
+## Deployable VS Code (code-server) WorkspaceKind for OpenShift AI.
+##
+## imageConfig values map to the code-server ImageStream from
+## workbenches-operator/opt/manifests/workbenches/notebooks/rhoai/base
+##
+## Image refs are injected at deploy time from notebooks params.env / params-latest.env
+## (RELATED_IMAGE_* when set, otherwise bundled fallback digests/tags).
+
+apiVersion: kubeflow.org/v1beta1
+kind: WorkspaceKind
+metadata:
+  name: codeserver
+  labels:
+    app.opendatahub.io/name: workbenches
+    app.opendatahub.io/component: workspaces-controller
+    opendatahub.io/platform: "rhoai"
+spec:
+  spawner:
+    displayName: "VS Code (code-server)"
+    description: "A Workspace which runs VS Code (code-server) in a Pod using OpenShift AI workbench images"
+    icon:
+      url: "https://upload.wikimedia.org/wikipedia/commons/9/9a/Visual_Studio_Code_1.35_icon.svg"
+    logo:
+      url: "https://upload.wikimedia.org/wikipedia/commons/9/9a/Visual_Studio_Code_1.35_icon.svg"
+
+  ## No activityRules: code-server has no reliable idle-activity signal (unlike
+  ## jupyter.lastActivity). Auto-pause is intentionally disabled until a validated
+  ## podExec probe exists.
+  podTemplate:
+    podMetadata:
+      labels: {}
+      annotations: {}
+    volumeMounts:
+      home: "/opt/app-root/src"
+    ports:
+      - id: "codeserver"
+        defaultDisplayName: "VS Code (code-server)"
+        protocol: "HTTP"
+        httpProxy:
+          removePathPrefix: true
+          requestHeaders: {}
+    extraEnv: []
+    extraVolumeMounts:
+      - name: "dshm"
+        mountPath: "/dev/shm"
+    extraVolumes:
+      - name: "dshm"
+        emptyDir:
+          medium: "Memory"
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    options:
+      imageConfig:
+        spawner:
+          default: "code-server-notebook:3.6"
+        values:
+          ## Code Server | Data Science | CPU | Python 3.12 (3.6)
+          ## ImageStream code-server-notebook:3.6
+          - id: "code-server-notebook:3.6"
+            spawner:
+              displayName: "Code Server | Data Science | CPU | Python 3.12 (3.6)"
+              description: "code-server workbench allows users to code, build, and collaborate on projects directly from web."
+              labels:
+                - key: "codeserver_version"
+                  value: "4.122"
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-codeserver-datascience-cpu-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "codeserver"
+                  port: 8787
+
+          ## Code Server | Data Science | CPU | Python 3.12 (3.5)
+          ## ImageStream code-server-notebook:3.5
+          - id: "code-server-notebook:3.5"
+            spawner:
+              displayName: "Code Server | Data Science | CPU | Python 3.12 (3.5)"
+              description: "code-server workbench allows users to code, build, and collaborate on projects directly from web."
+              labels:
+                - key: "codeserver_version"
+                  value: "4.106"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "code-server-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to code-server-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-codeserver-datascience-cpu-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "codeserver"
+                  port: 8787
+
+          ## Code Server | Data Science | CPU | Python 3.12 (3.4)
+          ## ImageStream code-server-notebook:3.4
+          - id: "code-server-notebook:3.4"
+            spawner:
+              displayName: "Code Server | Data Science | CPU | Python 3.12 (3.4)"
+              description: "code-server workbench allows users to code, build, and collaborate on projects directly from web."
+              labels:
+                - key: "codeserver_version"
+                  value: "4.106"
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "code-server-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to code-server-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-codeserver-datascience-cpu-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "codeserver"
+                  port: 8787
+
+          ## Code Server | Data Science | CPU | Python 3.12 (2025.2)
+          ## ImageStream code-server-notebook:2025.2
+          - id: "code-server-notebook:2025.2"
+            spawner:
+              displayName: "Code Server | Data Science | CPU | Python 3.12 (2025.2)"
+              description: "code-server workbench allows users to code, build, and collaborate on projects directly from web."
+              labels:
+                - key: "codeserver_version"
+                  value: "4.104"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "code-server-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to code-server-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-codeserver-datascience-cpu-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "codeserver"
+                  port: 8787
+
+          ## Code Server | Data Science | CPU | Python 3.11 (2025.1)
+          ## ImageStream code-server-notebook:2025.1
+          - id: "code-server-notebook:2025.1"
+            spawner:
+              displayName: "Code Server | Data Science | CPU | Python 3.11 (2025.1)"
+              description: "code-server workbench allows users to code, build, and collaborate on projects directly from web."
+              labels:
+                - key: "codeserver_version"
+                  value: "4.98"
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "code-server-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to code-server-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-codeserver-datascience-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "codeserver"
+                  port: 8787
+
+      podConfig:
+        spawner:
+          default: "small_cpu"
+        values:
+          - id: "tiny_cpu"
+            spawner:
+              displayName: "Tiny CPU"
+              description: "Pod with 0.1 CPU, 128 Mi RAM"
+              labels:
+                - key: "cpu"
+                  value: "100m"
+                - key: "memory"
+                  value: "128Mi"
+            spec:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+          - id: "small_cpu"
+            spawner:
+              displayName: "Small CPU"
+              description: "Pod with 1 CPU, 2 Gi RAM"
+              labels:
+                - key: "cpu"
+                  value: "1000m"
+                - key: "memory"
+                  value: "2Gi"
+            spec:
+              resources:
+                requests:
+                  cpu: 1000m
+                  memory: 2Gi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi
+          - id: "big_gpu"
+            spawner:
+              displayName: "Big GPU"
+              description: "Pod with 4 CPU, 16 Gi RAM, and 1 NVIDIA GPU"
+              labels:
+                - key: "cpu"
+                  value: "4000m"
+                - key: "memory"
+                  value: "16Gi"
+                - key: "gpu"
+                  value: "1"
+            spec:
+              resources:
+                requests:
+                  cpu: 4000m
+                  memory: 16Gi
+                limits:
+                  cpu: 4000m
+                  memory: 16Gi
+                  nvidia.com/gpu: 1
+              tolerations:
+                - key: "nvidia.com/gpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"

@@ -1,0 +1,1443 @@
+## Deployable JupyterLab WorkspaceKind for OpenShift AI.
+##
+## imageConfig values map to OpenShift ImageStreams from
+## workbenches-operator/opt/manifests/workbenches/notebooks/rhoai/base
+## (jupyter workbench ImageStreams only; runtime ImageStreams are omitted).
+##
+## Image refs are injected at deploy time from notebooks params.env / params-latest.env
+## (RELATED_IMAGE_* when set, otherwise bundled fallback digests/tags).
+
+apiVersion: kubeflow.org/v1beta1
+kind: WorkspaceKind
+metadata:
+  name: jupyterlab
+  labels:
+    app.opendatahub.io/name: workbenches
+    app.opendatahub.io/component: workspaces-controller
+    opendatahub.io/platform: "rhoai"
+spec:
+  spawner:
+    displayName: "JupyterLab Notebook"
+    description: "A Workspace which runs JupyterLab in a Pod using OpenShift AI workbench images"
+    hidden: false
+    deprecated: false
+    icon:
+      url: "https://jupyter.org/assets/favicons/apple-touch-icon-152x152.png"
+    logo:
+      url: "https://upload.wikimedia.org/wikipedia/commons/3/38/Jupyter_logo.svg"
+
+  filterRules:
+    ## hide CUDA images in namespaces that do not advertise NVIDIA GPUs
+    - scope: IMAGE_CONFIG
+      effect:
+        ui:
+          hide: true
+      match:
+        - matchNamespace:
+            selector:
+              matchExpressions:
+                - key: "nvidia.com/gpu"
+                  operator: DoesNotExist
+        - matchImageConfig:
+            selector:
+              matchExpressions:
+                - key: "cuda_version"
+                  operator: Exists
+    ## hide ROCm images in namespaces that do not advertise AMD GPUs
+    - scope: IMAGE_CONFIG
+      effect:
+        ui:
+          hide: true
+      match:
+        - matchNamespace:
+            selector:
+              matchExpressions:
+                - key: "amd.com/gpu"
+                  operator: DoesNotExist
+        - matchImageConfig:
+            selector:
+              matchExpressions:
+                - key: "rocm_version"
+                  operator: Exists
+    ## hide NVIDIA GPU pod configs in namespaces that do not advertise NVIDIA GPUs
+    - scope: POD_CONFIG
+      effect:
+        ui:
+          hide: true
+      match:
+        - matchNamespace:
+            selector:
+              matchExpressions:
+                - key: "nvidia.com/gpu"
+                  operator: DoesNotExist
+        - matchPodConfig:
+            selector:
+              matchLabels:
+                gpu_vendor: nvidia
+    ## hide AMD GPU pod configs in namespaces that do not advertise AMD GPUs
+    - scope: POD_CONFIG
+      effect:
+        ui:
+          hide: true
+      match:
+        - matchNamespace:
+            selector:
+              matchExpressions:
+                - key: "amd.com/gpu"
+                  operator: DoesNotExist
+        - matchPodConfig:
+            selector:
+              matchLabels:
+                gpu_vendor: amd
+
+  activityRules:
+    - config:
+        secondsSinceActive: 7200
+        minRunningSeconds: 300
+      match: {}
+      effect:
+        pauseWorkspace: true
+
+  podTemplate:
+    podMetadata:
+      labels: {}
+      annotations: {}
+    activityProbe:
+      minProbeIntervalSeconds: 300
+      probeIntervalSeconds: 3600
+      jupyter:
+        lastActivity: true
+        portId: "jupyterlab"
+    volumeMounts:
+      ## ODH/RHOAI UBI workbench images use /opt/app-root/src as the user home
+      home: "/opt/app-root/src"
+    ports:
+      - id: "jupyterlab"
+        defaultDisplayName: "JupyterLab"
+        protocol: "HTTP"
+        httpProxy:
+          removePathPrefix: false
+          requestHeaders: {}
+    extraEnv:
+      - name: "NB_PREFIX"
+        value: |-
+          {{ httpPathPrefix "jupyterlab" }}
+      ## Jupyter auth is disabled in-container; access is restricted to authenticated
+      ## gateway-only ingress (kube-rbac-proxy / Workspace gateway). Direct Pod ingress
+      ## is not exposed to users.
+      - name: "NOTEBOOK_ARGS"
+        value: |-
+          --ServerApp.port=8888 --ServerApp.token='' --ServerApp.password='' --ServerApp.base_url={{ httpPathPrefix "jupyterlab" }} --ServerApp.quit_button=False
+    extraVolumeMounts:
+      - name: "dshm"
+        mountPath: "/dev/shm"
+    extraVolumes:
+      - name: "dshm"
+        emptyDir:
+          medium: "Memory"
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    options:
+      imageConfig:
+        spawner:
+          default: "s2i-minimal-notebook:3.6"
+        values:
+          ## Jupyter | Minimal | CPU | Python 3.12 (3.6)
+          ## ImageStream s2i-minimal-notebook:3.6
+          - id: "s2i-minimal-notebook:3.6"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CPU | Python 3.12 (3.5)
+          ## ImageStream s2i-minimal-notebook:3.5
+          - id: "s2i-minimal-notebook:3.5"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "s2i-minimal-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-minimal-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CPU | Python 3.12 (3.4)
+          ## ImageStream s2i-minimal-notebook:3.4
+          - id: "s2i-minimal-notebook:3.4"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "s2i-minimal-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-minimal-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CPU | Python 3.12 (2025.2)
+          ## ImageStream s2i-minimal-notebook:2025.2
+          - id: "s2i-minimal-notebook:2025.2"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "s2i-minimal-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-minimal-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CPU | Python 3.11 (2025.1)
+          ## ImageStream s2i-minimal-notebook:2025.1
+          - id: "s2i-minimal-notebook:2025.1"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.11 (2025.1)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "s2i-minimal-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-minimal-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.12 (3.6)
+          ## ImageStream minimal-gpu:3.6
+          - id: "minimal-gpu:3.6"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.12 (3.5)
+          ## ImageStream minimal-gpu:3.5
+          - id: "minimal-gpu:3.5"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "minimal-gpu:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to minimal-gpu:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.12 (3.4)
+          ## ImageStream minimal-gpu:3.4
+          - id: "minimal-gpu:3.4"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "minimal-gpu:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to minimal-gpu:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.12 (2025.2)
+          ## ImageStream minimal-gpu:2025.2
+          - id: "minimal-gpu:2025.2"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "minimal-gpu:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to minimal-gpu:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.11 (2025.1)
+          ## ImageStream minimal-gpu:2025.1
+          - id: "minimal-gpu:2025.1"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.11 (2025.1)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "12.6"
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "minimal-gpu:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to minimal-gpu:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.12 (3.6)
+          ## ImageStream jupyter-rocm-minimal:3.6
+          - id: "jupyter-rocm-minimal:3.6"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.12 (3.6)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.12 (3.5)
+          ## ImageStream jupyter-rocm-minimal:3.5
+          - id: "jupyter-rocm-minimal:3.5"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.12 (3.5)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "jupyter-rocm-minimal:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-minimal:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.12 (3.4)
+          ## ImageStream jupyter-rocm-minimal:3.4
+          - id: "jupyter-rocm-minimal:3.4"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.12 (3.4)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "6.4"
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-minimal:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-minimal:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.12 (2025.2)
+          ## ImageStream jupyter-rocm-minimal:2025.2
+          - id: "jupyter-rocm-minimal:2025.2"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.12 (2025.2)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "6.4"
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "jupyter-rocm-minimal:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-minimal:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.11 (2025.1)
+          ## ImageStream jupyter-rocm-minimal:2025.1
+          - id: "jupyter-rocm-minimal:2025.1"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.11 (2025.1)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "6.2"
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-minimal:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-minimal:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.12 (3.6)
+          ## ImageStream s2i-generic-data-science-notebook:3.6
+          - id: "s2i-generic-data-science-notebook:3.6"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.12 (3.5)
+          ## ImageStream s2i-generic-data-science-notebook:3.5
+          - id: "s2i-generic-data-science-notebook:3.5"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "s2i-generic-data-science-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.12 (3.4)
+          ## ImageStream s2i-generic-data-science-notebook:3.4
+          - id: "s2i-generic-data-science-notebook:3.4"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "s2i-generic-data-science-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.12 (2025.2)
+          ## ImageStream s2i-generic-data-science-notebook:2025.2
+          - id: "s2i-generic-data-science-notebook:2025.2"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "s2i-generic-data-science-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.11 (2025.1)
+          ## ImageStream s2i-generic-data-science-notebook:2025.1
+          - id: "s2i-generic-data-science-notebook:2025.1"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.11 (2025.1)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "s2i-generic-data-science-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.12 (3.6)
+          ## ImageStream pytorch:3.6
+          - id: "pytorch:3.6"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.12 (3.5)
+          ## ImageStream pytorch:3.5
+          - id: "pytorch:3.5"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+            redirect:
+              to: "pytorch:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.12 (3.4)
+          ## ImageStream pytorch:3.4
+          - id: "pytorch:3.4"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.10"
+              hidden: true
+            redirect:
+              to: "pytorch:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.12 (2025.2)
+          ## ImageStream pytorch:2025.2
+          - id: "pytorch:2025.2"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.7"
+            redirect:
+              to: "pytorch:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.11 (2025.1)
+          ## ImageStream pytorch:2025.1
+          - id: "pytorch:2025.1"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.11 (2025.1)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.6"
+                - key: "python_version"
+                  value: "v3.11"
+                - key: "pytorch_version"
+                  value: "2.6"
+              hidden: true
+            redirect:
+              to: "pytorch:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.6)
+          ## ImageStream jupyter-pytorch-llmcompressor:3.6
+          - id: "jupyter-pytorch-llmcompressor:3.6"
+            spawner:
+              displayName: "Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with PyTorch LLM Compressor libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+                - key: "llm_compressor_version"
+                  value: "0.13"
+            spec:
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.5)
+          ## ImageStream jupyter-pytorch-llmcompressor:3.5
+          - id: "jupyter-pytorch-llmcompressor:3.5"
+            spawner:
+              displayName: "Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with PyTorch LLM Compressor libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+                - key: "llm_compressor_version"
+                  value: "0.12"
+            redirect:
+              to: "jupyter-pytorch-llmcompressor:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.4)
+          ## ImageStream jupyter-pytorch-llmcompressor:3.4
+          - id: "jupyter-pytorch-llmcompressor:3.4"
+            spawner:
+              displayName: "Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with PyTorch LLM Compressor libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.10"
+                - key: "llm_compressor_version"
+                  value: "0.10"
+              hidden: true
+            redirect:
+              to: "jupyter-pytorch-llmcompressor:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (2025.2)
+          ## ImageStream jupyter-pytorch-llmcompressor:2025.2
+          - id: "jupyter-pytorch-llmcompressor:2025.2"
+            spawner:
+              displayName: "Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with PyTorch LLM Compressor libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.7"
+                - key: "llm_compressor_version"
+                  value: "0.9"
+            redirect:
+              to: "jupyter-pytorch-llmcompressor:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | ROCm | Python 3.12 (3.6)
+          ## ImageStream jupyter-rocm-pytorch:3.6
+          - id: "jupyter-rocm-pytorch:3.6"
+            spawner:
+              displayName: "Jupyter | PyTorch | ROCm | Python 3.12 (3.6)"
+              description: "Jupyter ROCm optimized PyTorch notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+            spec:
+              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | ROCm | Python 3.12 (3.5)
+          ## ImageStream jupyter-rocm-pytorch:3.5
+          - id: "jupyter-rocm-pytorch:3.5"
+            spawner:
+              displayName: "Jupyter | PyTorch | ROCm | Python 3.12 (3.5)"
+              description: "Jupyter ROCm optimized PyTorch notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.11"
+            redirect:
+              to: "jupyter-rocm-pytorch:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | ROCm | Python 3.12 (3.4)
+          ## ImageStream jupyter-rocm-pytorch:3.4
+          - id: "jupyter-rocm-pytorch:3.4"
+            spawner:
+              displayName: "Jupyter | PyTorch | ROCm | Python 3.12 (3.4)"
+              description: "Jupyter ROCm optimized PyTorch notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.4"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.9"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-pytorch:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | ROCm | Python 3.12 (2025.2)
+          ## ImageStream jupyter-rocm-pytorch:2025.2
+          - id: "jupyter-rocm-pytorch:2025.2"
+            spawner:
+              displayName: "Jupyter | PyTorch | ROCm | Python 3.12 (2025.2)"
+              description: "Jupyter ROCm optimized PyTorch notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.4"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.7"
+            redirect:
+              to: "jupyter-rocm-pytorch:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | ROCm | Python 3.11 (2025.1)
+          ## ImageStream jupyter-rocm-pytorch:2025.1
+          - id: "jupyter-rocm-pytorch:2025.1"
+            spawner:
+              displayName: "Jupyter | PyTorch | ROCm | Python 3.11 (2025.1)"
+              description: "Jupyter ROCm optimized PyTorch notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.2"
+                - key: "python_version"
+                  value: "v3.11"
+                - key: "pytorch_version"
+                  value: "2.6"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-pytorch:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-pytorch:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-pytorch-rocm-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | CUDA | Python 3.12 (3.6)
+          ## ImageStream tensorflow:3.6
+          - id: "tensorflow:3.6"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.12 (3.6)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.21"
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | CUDA | Python 3.12 (3.5)
+          ## ImageStream tensorflow:3.5
+          - id: "tensorflow:3.5"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.12 (3.5)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.21"
+            redirect:
+              to: "tensorflow:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | CUDA | Python 3.12 (3.4)
+          ## ImageStream tensorflow:3.4
+          - id: "tensorflow:3.4"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.12 (3.4)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.21"
+              hidden: true
+            redirect:
+              to: "tensorflow:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | CUDA | Python 3.12 (2025.2)
+          ## ImageStream tensorflow:2025.2
+          - id: "tensorflow:2025.2"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.12 (2025.2)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.20"
+            redirect:
+              to: "tensorflow:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | CUDA | Python 3.11 (2025.1)
+          ## ImageStream tensorflow:2025.1
+          - id: "tensorflow:2025.1"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.11 (2025.1)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.6"
+                - key: "python_version"
+                  value: "v3.11"
+                - key: "tensorflow_version"
+                  value: "2.18"
+              hidden: true
+            redirect:
+              to: "tensorflow:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | ROCm | Python 3.12 (3.6)
+          ## ImageStream jupyter-rocm-tensorflow:3.6
+          - id: "jupyter-rocm-tensorflow:3.6"
+            spawner:
+              displayName: "Jupyter | TensorFlow | ROCm | Python 3.12 (3.6)"
+              description: "Jupyter ROCm optimized TensorFlow notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.20"
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | ROCm | Python 3.12 (3.5)
+          ## ImageStream jupyter-rocm-tensorflow:3.5
+          - id: "jupyter-rocm-tensorflow:3.5"
+            spawner:
+              displayName: "Jupyter | TensorFlow | ROCm | Python 3.12 (3.5)"
+              description: "Jupyter ROCm optimized TensorFlow notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.19"
+            redirect:
+              to: "jupyter-rocm-tensorflow:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | ROCm | Python 3.12 (3.4)
+          ## ImageStream jupyter-rocm-tensorflow:3.4
+          - id: "jupyter-rocm-tensorflow:3.4"
+            spawner:
+              displayName: "Jupyter | TensorFlow | ROCm | Python 3.12 (3.4)"
+              description: "Jupyter ROCm optimized TensorFlow notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.4"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.18"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-tensorflow:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | ROCm | Python 3.12 (2025.2)
+          ## ImageStream jupyter-rocm-tensorflow:2025.2
+          - id: "jupyter-rocm-tensorflow:2025.2"
+            spawner:
+              displayName: "Jupyter | TensorFlow | ROCm | Python 3.12 (2025.2)"
+              description: "Jupyter ROCm optimized TensorFlow notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.4"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.18"
+            redirect:
+              to: "jupyter-rocm-tensorflow:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TensorFlow | ROCm | Python 3.11 (2025.1)
+          ## ImageStream jupyter-rocm-tensorflow:2025.1
+          - id: "jupyter-rocm-tensorflow:2025.1"
+            spawner:
+              displayName: "Jupyter | TensorFlow | ROCm | Python 3.11 (2025.1)"
+              description: "Jupyter ROCm optimized TensorFlow notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "v6.2"
+                - key: "python_version"
+                  value: "v3.11"
+                - key: "tensorflow_version"
+                  value: "2.14"
+              hidden: true
+            redirect:
+              to: "jupyter-rocm-tensorflow:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-tensorflow:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-rocm-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TrustyAI | CPU | Python 3.12 (3.6)
+          ## ImageStream odh-trustyai-notebook:3.6
+          - id: "odh-trustyai-notebook:3.6"
+            spawner:
+              displayName: "Jupyter | TrustyAI | CPU | Python 3.12 (3.6)"
+              description: "Jupyter TrustyAI notebook integrates the TrustyAI Explainability Toolkit on Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TrustyAI | CPU | Python 3.12 (3.5)
+          ## ImageStream odh-trustyai-notebook:3.5
+          - id: "odh-trustyai-notebook:3.5"
+            spawner:
+              displayName: "Jupyter | TrustyAI | CPU | Python 3.12 (3.5)"
+              description: "Jupyter TrustyAI notebook integrates the TrustyAI Explainability Toolkit on Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "odh-trustyai-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to odh-trustyai-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-3-5_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TrustyAI | CPU | Python 3.12 (3.4)
+          ## ImageStream odh-trustyai-notebook:3.4
+          - id: "odh-trustyai-notebook:3.4"
+            spawner:
+              displayName: "Jupyter | TrustyAI | CPU | Python 3.12 (3.4)"
+              description: "Jupyter TrustyAI notebook integrates the TrustyAI Explainability Toolkit on Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+              hidden: true
+            redirect:
+              to: "odh-trustyai-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to odh-trustyai-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-3-4_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TrustyAI | CPU | Python 3.12 (2025.2)
+          ## ImageStream odh-trustyai-notebook:2025.2
+          - id: "odh-trustyai-notebook:2025.2"
+            spawner:
+              displayName: "Jupyter | TrustyAI | CPU | Python 3.12 (2025.2)"
+              description: "Jupyter TrustyAI notebook integrates the TrustyAI Explainability Toolkit on Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            redirect:
+              to: "odh-trustyai-notebook:3.6"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to odh-trustyai-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-2025-2_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | TrustyAI | CPU | Python 3.11 (2025.1)
+          ## ImageStream odh-trustyai-notebook:2025.1
+          - id: "odh-trustyai-notebook:2025.1"
+            spawner:
+              displayName: "Jupyter | TrustyAI | CPU | Python 3.11 (2025.1)"
+              description: "Jupyter TrustyAI notebook integrates the TrustyAI Explainability Toolkit on Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.11"
+              hidden: true
+            redirect:
+              to: "odh-trustyai-notebook:3.6"
+              message:
+                level: "Warning"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to odh-trustyai-notebook:3.6 when convenient.
+            spec:
+              image: "odh-workbench-jupyter-trustyai-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+      podConfig:
+        spawner:
+          default: "small_cpu"
+        values:
+          - id: "tiny_cpu"
+            spawner:
+              displayName: "Tiny CPU"
+              description: "Pod with 0.1 CPU, 128 Mi RAM"
+              labels:
+                - key: "cpu"
+                  value: "100m"
+                - key: "memory"
+                  value: "128Mi"
+            spec:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+          - id: "small_cpu"
+            spawner:
+              displayName: "Small CPU"
+              description: "Pod with 1 CPU, 2 Gi RAM"
+              labels:
+                - key: "cpu"
+                  value: "1000m"
+                - key: "memory"
+                  value: "2Gi"
+            spec:
+              resources:
+                requests:
+                  cpu: 1000m
+                  memory: 2Gi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi
+          - id: "big_gpu"
+            spawner:
+              displayName: "Big GPU"
+              description: "Pod with 4 CPU, 16 Gi RAM, and 1 NVIDIA GPU"
+              labels:
+                - key: "cpu"
+                  value: "4000m"
+                - key: "memory"
+                  value: "16Gi"
+                - key: "gpu"
+                  value: "1"
+                - key: "gpu_vendor"
+                  value: "nvidia"
+            spec:
+              resources:
+                requests:
+                  cpu: 4000m
+                  memory: 16Gi
+                limits:
+                  cpu: 4000m
+                  memory: 16Gi
+                  nvidia.com/gpu: 1
+              tolerations:
+                - key: "nvidia.com/gpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"
+          - id: "big_amd_gpu"
+            spawner:
+              displayName: "Big AMD GPU"
+              description: "Pod with 4 CPU, 16 Gi RAM, and 1 AMD GPU"
+              labels:
+                - key: "cpu"
+                  value: "4000m"
+                - key: "memory"
+                  value: "16Gi"
+                - key: "gpu"
+                  value: "1"
+                - key: "gpu_vendor"
+                  value: "amd"
+            spec:
+              resources:
+                requests:
+                  cpu: 4000m
+                  memory: 16Gi
+                limits:
+                  cpu: 4000m
+                  memory: 16Gi
+                  amd.com/gpu: 1
+              tolerations:
+                - key: "amd.com/gpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"
