@@ -54,7 +54,7 @@ Upstream manifests are **committed** under `opt/manifests/` for hermetic contain
 
 ### Manifest sources (ODH and RHOAI)
 
-Manifests under `opt/manifests/` are fetched and committed to this repo. Sources are defined in `get_all_manifests.sh` as ODH (upstream) and RHOAI (downstream) maps, selected by `ODH_PLATFORM_TYPE` (`OpenDataHub` or `rhoai`) — same pattern as opendatahub-operator / rhods-operator.
+Manifests under `opt/manifests/` are fetched and committed to this repo. Sources are defined in `opt/manifest-sources.sh` as ODH (upstream) and RHOAI (downstream) maps, selected by `ODH_PLATFORM_TYPE` (`OpenDataHub` or `rhoai`) — same pattern as opendatahub-operator / rhods-operator. Git refs in that file are per operator branch and are kept by `sync-branches.yaml`.
 
 | Component | ODH (upstream) | RHOAI (downstream) | Path |
 |-----------|----------------|-------------------|------|
@@ -69,11 +69,11 @@ make manifests-fetch                              # ODH / upstream (default)
 make manifests-fetch ODH_PLATFORM_TYPE=rhoai      # RHOAI / downstream
 ```
 
-Do not edit files under `opt/manifests/` manually. After fetching, inspect the tree, run `make test`, then commit both `get_all_manifests.sh` (if sources changed) and `opt/manifests/`.
+Do not edit files under `opt/manifests/` manually. After fetching, inspect the tree, run `make test`, then commit both `opt/manifest-sources.sh` (if sources changed) and `opt/manifests/`.
 
-A scheduled GitHub Action ([`.github/workflows/manifest-sync.yaml`](.github/workflows/manifest-sync.yaml)) runs daily, refreshes **ODH** manifests, validates rendering with `TestRenderRealManifests`, and opens/updates a PR when content changes. See [`opt/README.md`](opt/README.md) and [`DEPENDENCIES.md`](DEPENDENCIES.md).
+A scheduled GitHub Action ([`.github/workflows/manifests-sync-main.yaml`](.github/workflows/manifests-sync-main.yaml)) runs daily against `main`, refreshes **ODH** manifests, validates rendering with `TestRenderRealManifests`, and opens/updates a PR when content changes. Pushes to `stable` and `v1.x` (and a daily schedule for `stable`) run [`.github/workflows/manifests-sync-stable.yaml`](.github/workflows/manifests-sync-stable.yaml), which commits fetched manifests directly (`stable` also bumps ODH `branch@sha` pins in `opt/manifest-sources.sh` first; `v1.x` keeps tag pins). Operand refs live in `opt/manifest-sources.sh` and are kept on the target branch by [`.github/workflows/sync-branches.yaml`](.github/workflows/sync-branches.yaml). See [`opt/README.md`](opt/README.md) and [`DEPENDENCIES.md`](DEPENDENCIES.md).
 
-The sync workflow needs permission to open PRs: enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a fine-grained personal access token (scoped to this repository with `contents: write` and `pull_requests: write`) as a repository secret.
+The main sync workflow needs permission to open PRs: enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a fine-grained personal access token (scoped to this repository with `contents: write` and `pull_requests: write`) as a repository secret. Direct commits on `stable`/`v1.x` also require those branches to allow GitHub Actions to push (or the PAT to bypass branch protection).
 
 Override individual sources:
 
@@ -354,17 +354,21 @@ kubectl get workbenches default-workbenches
 
 ### GitHub Actions
 
-Workflows run on pushes and PRs to `main`, `stable`, and `v1.x` (except manifest-sync, which is scheduled against `main`):
+Most workflows run on pushes and PRs to `main`, `stable`, and `v1.x`. Manifest sync on `main` is scheduled; on `stable`/`v1.x` it runs on push (and daily on `stable`). Other scheduled and path-filtered workflows are noted below.
 
 | Workflow | Purpose |
 |----------|---------|
 | [`test.yml`](.github/workflows/test.yml) | Unit tests and manifest rendering validation |
 | [`build.yml`](.github/workflows/build.yml) | `make build` |
-| [`lint.yml`](.github/workflows/lint.yml) | golangci-lint, go vet, kube-linter, Helm lint, chart sync checks, verify-manifests, verify-generate |
+| [`lint.yml`](.github/workflows/lint.yml) | pre-commit, golangci-lint, go vet, go mod verify, kube-linter, Helm lint, chart sync checks, verify-manifests, verify-generate |
 | [`e2e.yml`](.github/workflows/e2e.yml) | End-to-end tests on Kind cluster |
+| [`govulncheck.yaml`](.github/workflows/govulncheck.yaml) | Go vulnerability scan on push to `main` (also `workflow_dispatch`) |
+| [`disconnected-readiness.yaml`](.github/workflows/disconnected-readiness.yaml) | Airgapped/disconnected readiness check on PRs |
+| [`operator-chaos-validation.yaml`](.github/workflows/operator-chaos-validation.yaml) | operator-chaos shift-left validation (knowledge, CRD diff, upgrade dry-run) on PRs touching `chaos/`, `api/`, `internal/controller/`, or `config/crd/` |
 | [`go-directive-updater.yaml`](.github/workflows/go-directive-updater.yaml) | Weekly Go patch version bumps |
-| [`manifest-sync.yaml`](.github/workflows/manifest-sync.yaml) | Daily upstream manifest sync PRs |
-| [`sync-branches.yaml`](.github/workflows/sync-branches.yaml) | Manual/workflow_call branch sync (`main→stable`, `stable→v1.x`); excludes `opt/manifests` |
+| [`manifests-sync-main.yaml`](.github/workflows/manifests-sync-main.yaml) | Daily upstream manifest sync PRs against `main` |
+| [`manifests-sync-stable.yaml`](.github/workflows/manifests-sync-stable.yaml) | On push to `stable`/`v1.x` (daily on `stable`): commit manifests directly (SHA pin bump on `stable` only) |
+| [`sync-branches.yaml`](.github/workflows/sync-branches.yaml) | Manual/workflow_call branch sync (`main→stable`, `stable→v1.x`); keeps target `opt/manifests`, `opt/manifest-sources.sh`, and `.tekton` |
 | [`tls-lint.yml`](.github/workflows/tls-lint.yml) | TLS configuration lint with SARIF upload |
 | [`semgrep-tls.yml`](.github/workflows/semgrep-tls.yml) | Semgrep TLS compliance rules on PRs |
 
@@ -372,7 +376,9 @@ Coverage is uploaded to Codecov ([`codecov.yml`](codecov.yml)).
 
 [Dependabot](.github/dependabot.yml) is configured for weekly GitHub Actions version bumps and Go module security-only updates.
 
-Security scanning: [gitleaks](.gitleaks.toml) for secret detection and [Semgrep](semgrep.yaml) for TLS compliance rules.
+Local hygiene hooks live in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (`golangci-lint` is skipped in CI because `lint.yml` already runs it).
+
+Security scanning: [gitleaks](.gitleaks.toml) for secret detection, [Semgrep](semgrep.yaml) for TLS compliance rules, and [`govulncheck`](.github/workflows/govulncheck.yaml) for Go dependency vulnerabilities.
 
 ### Konflux / Tekton
 
@@ -391,6 +397,7 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 .
 ├── api/v1alpha1/              # Workbenches CRD Go types
 ├── charts/operator/           # Helm chart (synced from config/)
+├── chaos/                     # operator-chaos knowledge (ODH/RHOAI profiles) + experiments
 ├── ci/                        # Go version bump helper scripts
 ├── cmd/main.go                # Operator entrypoint
 ├── config/
@@ -415,10 +422,12 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 │       └── tls/               # Runtime TLS provider auto-detection + cert provisioning
 ├── opt/
 │   ├── README.md              # Manifest contributor guidance
+│   ├── manifest-sources.sh    # Per-branch operand org/repo/ref map
 │   └── manifests/             # Committed upstream manifests (hermetic builds)
 ├── hack/                      # Chart sync/verify scripts
 ├── .github/dependabot.yml     # Dependabot config (GHA + Go security)
 ├── .gitleaks.toml             # Secret scanning configuration (gitleaks)
+├── .pre-commit-config.yaml    # pre-commit hooks (CI + local)
 ├── semgrep.yaml               # Semgrep TLS compliance rules
 ├── get_all_manifests.sh       # Upstream manifest fetch script
 ├── tests/e2e/                 # End-to-end Ginkgo tests (Kind in CI)
@@ -465,7 +474,8 @@ Review [`OWNERS`](OWNERS) for approvers and reviewers. Open pull requests agains
 
 - When upstream notebook controller manifests add or rename ClusterRoles, update [`config/rbac/rbac_escalate_role.yaml`](config/rbac/rbac_escalate_role.yaml) and run `make chart-sync-rbac`.
 - After changing kubebuilder markers, run `make manifests` and `make chart-sync`.
-- When refreshing upstream manifests, commit `opt/manifests/` together with any `get_all_manifests.sh` source changes.
+- When refreshing upstream manifests, commit `opt/manifests/` together with any `opt/manifest-sources.sh` source changes.
+- When operand topology, webhooks, or notebook ImageStreams change, update the matching chaos profile under [`chaos/profiles/odh`](chaos/profiles/odh) or [`chaos/profiles/rhoai`](chaos/profiles/rhoai).
 - See [`DEPENDENCIES.md`](DEPENDENCIES.md) for Go version, dependency, and upstream manifest upgrade procedures.
 - Agent-oriented project conventions live in [`AGENTS.md`](AGENTS.md).
 

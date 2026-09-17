@@ -39,6 +39,8 @@ func TestRelatedImagesFromEnv(t *testing.T) {
 			return "  registry.redhat.io/rhoai/odh-kf-notebook-controller-rhel9@sha256:def  "
 		case "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_CPU_PY312_IMAGE":
 			return "registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:ghi"
+		case "RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE":
+			return "registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy"
 		default:
 			return ""
 		}
@@ -50,6 +52,8 @@ func TestRelatedImagesFromEnv(t *testing.T) {
 		paramODHNotebookControllerImage:                  "registry.redhat.io/rhoai/odh-notebook-controller-rhel9@sha256:abc",
 		"odh-kf-notebook-controller-image":               "registry.redhat.io/rhoai/odh-kf-notebook-controller-rhel9@sha256:def",
 		"odh-workbench-jupyter-minimal-cpu-py312-ubi9-n": "registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:ghi",
+		"kube-rbac-proxy":                                "registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy",
+		"KUBE_RBAC_PROXY_IMAGE":                          "registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy",
 	}
 
 	if len(got) != len(want) {
@@ -144,6 +148,64 @@ func TestApplyRelatedImageParamsUpdatesControllersAndLatest(t *testing.T) {
 	// Unmapped / unset RELATED_IMAGE keys must stay as bundled defaults.
 	if !strings.Contains(latestContent, "odh-workbench-jupyter-datascience-cpu-py312-ubi9-n=dummy") {
 		t.Errorf("params-latest.env datascience dummy was changed unexpectedly:\n%s", latestContent)
+	}
+}
+
+func TestApplyRelatedImageParamsUpdatesWorkspacesGatewaySidecar(t *testing.T) {
+	orig := lookupEnv
+	t.Cleanup(func() { lookupEnv = orig })
+
+	lookupEnv = func(key string) string {
+		switch key {
+		case "RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE":
+			return "registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy"
+		case "RELATED_IMAGE_ODH_WORKBENCHES_CONTROLLER_IMAGE":
+			return "registry.redhat.io/rhoai/odh-workbenches-controller-rhel9@sha256:ctrl"
+		default:
+			return ""
+		}
+	}
+
+	fSys := filesys.MakeFsInMemory()
+	dir := "/manifests"
+
+	if err := fSys.Mkdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mirrors workbenches/workspaces-controller/overlays/gateway/params.env.
+	paramsEnv := "USE_KUBE_GATEWAY=true\n" +
+		"KUBE_GATEWAY_NAME=data-science-gateway\n" +
+		"KUBE_GATEWAY_NAMESPACE=openshift-ingress\n" +
+		"CLUSTER_DOMAIN=cluster.local\n" +
+		"KUBE_RBAC_PROXY_IMAGE=quay.io/opendatahub/odh-kube-auth-proxy@sha256:old\n" +
+		"WORKBENCH_CONTROLLER_IMAGE=quay.io/opendatahub/odh-workbenches-controller:odh-stable\n"
+
+	if err := fSys.WriteFile(filepath.Join(dir, "params.env"), []byte(paramsEnv)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyRelatedImageParams(fSys, dir); err != nil {
+		t.Fatalf("applyRelatedImageParams() error = %v", err)
+	}
+
+	got, err := fSys.ReadFile(filepath.Join(dir, "params.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(got)
+
+	if !strings.Contains(content, "KUBE_RBAC_PROXY_IMAGE=registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy") {
+		t.Errorf("gateway params.env KUBE_RBAC_PROXY_IMAGE not updated:\n%s", content)
+	}
+
+	if !strings.Contains(content, "WORKBENCH_CONTROLLER_IMAGE=registry.redhat.io/rhoai/odh-workbenches-controller-rhel9@sha256:ctrl") {
+		t.Errorf("gateway params.env WORKBENCH_CONTROLLER_IMAGE not updated:\n%s", content)
+	}
+
+	if !strings.Contains(content, "USE_KUBE_GATEWAY=true") {
+		t.Errorf("gateway params.env USE_KUBE_GATEWAY was lost:\n%s", content)
 	}
 }
 

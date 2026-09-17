@@ -76,8 +76,11 @@ var imageParamMap = map[string]string{
 	"odh-pipeline-runtime-pytorch-rocm-py312-ubi9-n":               "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_PYTORCH_ROCM_PY312_IMAGE",
 	"odh-pipeline-runtime-pytorch-llmcompressor-cuda-py312-ubi9-n": "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_PYTORCH_LLMCOMPRESSOR_CUDA_PY312_IMAGE",
 
-	// Workspaces controller
+	// Workspaces controller (gateway overlay). KUBE_RBAC_PROXY_IMAGE is the
+	// sidecar injected onto Workspace pods; kube-rbac-proxy above is the
+	// notebook-controller params key. Both consume the same RELATED_IMAGE_*.
 	"WORKBENCH_CONTROLLER_IMAGE": "RELATED_IMAGE_ODH_WORKBENCHES_CONTROLLER_IMAGE",
+	"KUBE_RBAC_PROXY_IMAGE":      "RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE",
 }
 
 // relatedImagesFromEnv returns params-file key → image ref for every mapped

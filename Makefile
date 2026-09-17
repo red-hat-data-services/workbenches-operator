@@ -30,7 +30,8 @@ help: ## Display this help.
 
 ##@ Development
 
-# ODH_PLATFORM_TYPE selects manifest sources in get_all_manifests.sh:
+# ODH_PLATFORM_TYPE selects manifest sources in opt/manifest-sources.sh
+# (loaded by get_all_manifests.sh):
 #   OpenDataHub (default) — opendatahub-io upstream
 #   rhoai — red-hat-data-services RHOAI/downstream
 ODH_PLATFORM_TYPE ?= OpenDataHub

@@ -1,0 +1,37 @@
+apiVersion: chaos.operatorchaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: workbenches-operator-pod-kill
+spec:
+  tier: 2
+  target:
+    operator: workbenches-operator
+    component: workbenches-operator
+    resource: Deployment/workbenches-operator
+  steadyState:
+    timeout: "30s"
+    checks:
+      - type: conditionTrue
+        apiVersion: apps/v1
+        kind: Deployment
+        name: workbenches-operator
+        namespace: workbenches-operator-system
+        conditionType: Available
+  injection:
+    type: PodKill
+    dangerLevel: medium
+    parameters:
+      labelSelector: control-plane=controller-manager
+      namespace: workbenches-operator-system
+      ttl: "120s"
+  hypothesis:
+    description: >-
+      Killing the operator pod tests whether the Deployment controller
+      restarts it promptly. The operator should resume reconciliation
+      after restart without manual intervention.
+    recoveryTimeout: 120s
+  blastRadius:
+    maxPodsAffected: 1
+    allowDangerous: false
+    allowedNamespaces:
+      - workbenches-operator-system

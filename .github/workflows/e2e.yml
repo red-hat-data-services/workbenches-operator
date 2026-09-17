@@ -31,6 +31,8 @@ on:
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   e2e:
     name: E2E Tests (${{ matrix.deploy-method }})

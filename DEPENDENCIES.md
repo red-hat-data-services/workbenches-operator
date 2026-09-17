@@ -93,19 +93,30 @@ make <tool>
 
 ## Upgrading Upstream Manifests
 
-Upstream component manifests are stored in `opt/manifests/` and committed to the repository. They are refreshed by the scheduled `.github/workflows/manifest-sync.yaml` workflow, which runs `get_all_manifests.sh` daily and opens a PR when content changes. This keeps Konflux container builds hermetic and supports airgapped deployments that cannot reach GitHub at build or runtime.
+Upstream component manifests are stored in `opt/manifests/` and committed to the repository. They are refreshed by two workflows:
 
-The manifest-sync workflow needs permission to open PRs. Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a `MANIFEST_SYNC_PAT` repository secret (PAT with `repo` scope).
+- `.github/workflows/manifests-sync-main.yaml` — daily on `main`; runs `get_all_manifests.sh` and opens a PR when content changes
+- `.github/workflows/manifests-sync-stable.yaml` — on each push to `stable` or `v1.x`, and daily for `stable`; on `stable` bumps ODH `branch@sha` pins in `opt/manifest-sources.sh` (`ci/bump-odh-manifest-shas.sh`), then on both branches runs `get_all_manifests.sh` and commits directly. `v1.x` skips the SHA bump because operand pins are tags. The bump helper fails closed if no `branch@sha` pins are present.
 
-Manifest sources are defined in `get_all_manifests.sh` as two maps (same pattern as
-opendatahub-operator / rhods-operator):
+This keeps Konflux container builds hermetic and supports airgapped deployments that cannot reach GitHub at build or runtime.
+
+The main sync workflow needs permission to open PRs. Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a `MANIFEST_SYNC_PAT` repository secret (PAT with `repo` scope). Direct commits to `stable`/`v1.x` also require those branches to allow GitHub Actions to push (or the PAT to bypass branch protection).
+
+Manifest sources are defined in `opt/manifest-sources.sh` as two maps (same
+pattern as opendatahub-operator / rhods-operator). `get_all_manifests.sh` loads
+that file. Branch sync (`.github/workflows/sync-branches.yaml`) keeps the
+**target** copy of `opt/manifest-sources.sh` and `opt/manifests/` so
+`main → stable` cannot overwrite `stable@sha` pins and `stable → v1.x` cannot
+overwrite tag pins. Fetch-script changes in `get_all_manifests.sh` still
+propagate. The target branch must already have `opt/manifest-sources.sh`;
+sync-branches will not copy it from the source branch.
 
 - `ODH_COMPONENT_MANIFESTS` — upstream `opendatahub-io` sources (default)
 - `RHOAI_COMPONENT_MANIFESTS` — downstream `red-hat-data-services` sources
 
 `ODH_PLATFORM_TYPE` selects which map is used (`OpenDataHub` by default; `rhoai`
-selects RHOAI). Unsupported values exit with an error. Upstream CI and the daily
-manifest-sync workflow use the ODH map. Downstream
+selects RHOAI). Unsupported values exit with an error. Upstream CI and the
+manifest-sync workflows use the ODH map. Downstream
 `red-hat-data-services/workbenches-operator` fetches with `ODH_PLATFORM_TYPE=rhoai`
 so `opt/manifests/` matches the workbench entries in
 [rhods-operator](https://github.com/red-hat-data-services/rhods-operator)
@@ -113,12 +124,17 @@ prefetched manifests for that release branch.
 
 ### ODH (upstream) sources
 
-| Target | Source Repository | Branch | Source Path |
-|--------|-------------------|--------|-------------|
-| `workbenches/kf-notebook-controller` | `opendatahub-io/kubeflow` | `main` | `components/notebook-controller/config` |
-| `workbenches/odh-notebook-controller` | `opendatahub-io/kubeflow` | `main` | `components/odh-notebook-controller/config` |
-| `workbenches/notebooks` | `opendatahub-io/notebooks` | `main` | `manifests` |
-| `workbenches/workspaces-controller` | `opendatahub-io/workbenches` | `main` | `workspaces/controller/manifests/kustomize` |
+Git refs (branch, tag, or `branch@sha`) are **per operator branch** in
+`opt/manifest-sources.sh` — for example `main` on `main`, `stable@<sha>` on
+`stable`, and version tags on `v1.x`. Downstream forks may use different orgs
+and refs.
+
+| Target | Source Repository | Source Path |
+|--------|-------------------|-------------|
+| `workbenches/kf-notebook-controller` | `opendatahub-io/kubeflow` | `components/notebook-controller/config` |
+| `workbenches/odh-notebook-controller` | `opendatahub-io/kubeflow` | `components/odh-notebook-controller/config` |
+| `workbenches/notebooks` | `opendatahub-io/notebooks` | `manifests` |
+| `workbenches/workspaces-controller` | `opendatahub-io/workbenches` | `workspaces/controller/manifests/kustomize` |
 
 Operator-owned paths under `opt/manifests/` (preserved across refresh, not fetched from upstream):
 
@@ -128,18 +144,21 @@ Operator-owned paths under `opt/manifests/` (preserved across refresh, not fetch
 
 ### RHOAI (downstream) sources
 
-| Target | Source Repository | Branch | Source Path |
-|--------|-------------------|--------|-------------|
-| `workbenches/kf-notebook-controller` | `red-hat-data-services/kubeflow` | `main` | `components/notebook-controller/config` |
-| `workbenches/odh-notebook-controller` | `red-hat-data-services/kubeflow` | `main` | `components/odh-notebook-controller/config` |
-| `workbenches/notebooks` | `red-hat-data-services/notebooks` | `main` | `manifests` |
-| `workbenches/workspaces-controller` | `red-hat-data-services/workbenches` | `main` | `workspaces/controller/manifests/kustomize` |
+Refs for these entries also live in `opt/manifest-sources.sh` (typically
+`red-hat-data-services` release branches or tags on downstream forks).
+
+| Target | Source Repository | Source Path |
+|--------|-------------------|-------------|
+| `workbenches/kf-notebook-controller` | `red-hat-data-services/kubeflow` | `components/notebook-controller/config` |
+| `workbenches/odh-notebook-controller` | `red-hat-data-services/kubeflow` | `components/odh-notebook-controller/config` |
+| `workbenches/notebooks` | `red-hat-data-services/notebooks` | `manifests` |
+| `workbenches/workspaces-controller` | `red-hat-data-services/workbenches` | `workspaces/controller/manifests/kustomize` |
 
 To pin manifests to a specific commit, update the ref field to include a SHA:
 
 ```shell
-# Format: org:repo:branch@sha:source_path
-["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:main@abc123def:components/notebook-controller/config"
+# Format: org:repo:branch@sha:source_path (in opt/manifest-sources.sh)
+["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:stable@abc123def:components/notebook-controller/config"
 ```
 
 After modifying manifest sources:
@@ -147,7 +166,7 @@ After modifying manifest sources:
 1. Run `make manifests-fetch` (ODH) or `make manifests-fetch ODH_PLATFORM_TYPE=rhoai` (RHOAI).
 2. Inspect the resulting files in `opt/manifests/` for expected changes.
 3. Run `make test` to ensure the controller still renders manifests correctly.
-4. Commit changes to `get_all_manifests.sh` and `opt/manifests/`.
+4. Commit changes to `opt/manifest-sources.sh` and `opt/manifests/`.
 5. If upstream ClusterRoles changed, sync `config/rbac/rbac_escalate_role.yaml` and `charts/operator/templates/clusterrole-escalate.yaml`.
 6. If `params.env` / `params-latest.env` gained or renamed image keys (common for
    workbench/runtime ImageStreams when Python or UBI versions change), update

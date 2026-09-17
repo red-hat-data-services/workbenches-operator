@@ -1,0 +1,41 @@
+apiVersion: chaos.operatorchaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: workbenches-operator-webhook-disrupt
+spec:
+  tier: 3
+  target:
+    operator: workbenches-operator
+    component: workbenches-operator
+    resource: Service/workbenches-operator-webhook-service
+  steadyState:
+    timeout: "30s"
+    checks:
+      - type: conditionTrue
+        apiVersion: apps/v1
+        kind: Deployment
+        name: workbenches-operator
+        namespace: workbenches-operator-system
+        conditionType: Available
+  injection:
+    type: WebhookDisrupt
+    dangerLevel: high
+    parameters:
+      webhookName: workbenches-operator-mutating-webhook-configuration
+      action: setFailurePolicy
+      serviceName: workbenches-operator-webhook-service
+      namespace: workbenches-operator-system
+      webhookPaths: "/workbenches-connection-notebook,/workbenches-hardware-profile"
+      ttl: "180s"
+  hypothesis:
+    description: >-
+      Disrupting the webhook service tests whether Notebook creation and
+      mutation is gracefully degraded when the webhooks are unreachable.
+      The failurePolicy on the MutatingWebhookConfiguration determines
+      whether requests are rejected or allowed through.
+    recoveryTimeout: 180s
+  blastRadius:
+    maxPodsAffected: 1
+    allowDangerous: true
+    allowedNamespaces:
+      - workbenches-operator-system

@@ -11,7 +11,7 @@ This is a Kubernetes operator (built with Kubebuilder/controller-runtime) that m
 
 - **Singleton CR**: Only one `Workbenches` resource is allowed, and it must be named `default-workbenches`. Enforced via CEL on the CRD (`WorkbenchesInstanceName` in `api/v1alpha1`).
 - **Manifest rendering**: The operator reads Kustomize bundles from a filesystem path (`--manifests-base-path`, default `/opt/manifests`) and renders them at runtime with the krusty engine — it does not embed manifests in Go code.
-- **Committed manifests**: Operand manifests under `opt/manifests/` are fetched by `get_all_manifests.sh`, committed to the repo, and copied into the image at build time. Do not hand-edit them. The script has ODH and RHOAI source maps; `ODH_PLATFORM_TYPE` selects which (`OpenDataHub` default or `rhoai` for downstream).
+- **Committed manifests**: Operand manifests under `opt/manifests/` are fetched by `get_all_manifests.sh`, committed to the repo, and copied into the image at build time. Do not hand-edit them. Operand org/repo/ref maps live in `opt/manifest-sources.sh` (kept per branch by `sync-branches.yaml`); `ODH_PLATFORM_TYPE` selects ODH or RHOAI (`OpenDataHub` default or `rhoai` for downstream).
 - **Server-side apply**: Manifest application uses SSA with field manager `workbenches-operator`.
 - **Platform awareness**: Platforms `OpenDataHub` and `SelfManagedRhoai` select different notebook overlays and default namespaces.
 - **Immutable fields**: `workbenchNamespace` is immutable after initial creation (CEL-enforced). It names the legacy JupyterHub-era notebooks namespace (ensured on reconcile); operand deploy uses the resolved applications namespace.
@@ -41,10 +41,13 @@ internal/gvk/                   Notebook, HardwareProfile, ImageStream, Namespac
 config/                         Kustomize (base, default/OpenShift, certmanager, crd, rbac, manager, operator, webhook, samples)
 charts/operator/                Helm chart (CRD/RBAC synced from generated config/)
 opt/manifests/                  Upstream operand manifests (get_all_manifests.sh; do not hand-edit)
-ci/                             Go directive bump helper script
+opt/manifest-sources.sh         Per-branch operand org/repo/ref map (kept by sync-branches)
+chaos/                          operator-chaos knowledge models (profiles/odh, profiles/rhoai) + experiments
+ci/                             Go directive bump + ODH manifest SHA pin helpers
 hack/                           Boilerplate + Helm chart sync/verify scripts
-.github/workflows/              CI (test, build, lint, e2e, manifest-sync, sync-branches, TLS lint, Semgrep)
+.github/workflows/              CI (test, build, lint, e2e, govulncheck, disconnected-readiness, operator-chaos, manifests-sync-main/stable, sync-branches, TLS lint, Semgrep)
 .github/dependabot.yml          Dependabot: weekly GHA bumps + Go security updates
+.pre-commit-config.yaml         pre-commit hooks (golangci-lint skipped in CI; dedicated lint job exists)
 semgrep.yaml                    Semgrep TLS compliance rules
 .gitleaks.toml                  Secret scanning configuration (gitleaks)
 .tekton/                        Konflux build PipelineRuns
@@ -98,7 +101,7 @@ There are no `test-upgrade`, `test-handler`, or `bundle` Makefile targets.
 
 ### Manifests
 - Sources and sync process are documented in [DEPENDENCIES.md](DEPENDENCIES.md) and `opt/README.md`.
-- Do not edit files under `opt/manifests/` directly — they are overwritten by `get_all_manifests.sh` / the daily `manifest-sync` workflow.
+- Do not edit files under `opt/manifests/` directly — they are overwritten by `get_all_manifests.sh` / the manifest-sync workflows. Operand refs live in `opt/manifest-sources.sh` (kept per branch by `sync-branches.yaml`).
 - At render time the controller copies the tree, overlays `RELATED_IMAGE_*` onto existing keys in `params.env` / `params-latest.env` (`imageParamMap` in `internal/controller/imageparams.go`), then merges CR-derived params (`section-title`, `mlflow-enabled`, `gateway-url`), and applies platform-specific overlays.
 - Keep `imageParamMap` in sync when upstream manifests add/rename image keys, and with opendatahub-operator's workbenches module `relatedImages` list (see [DEPENDENCIES.md](DEPENDENCIES.md) "Upgrading Upstream Manifests").
 
@@ -146,13 +149,23 @@ Registered in `internal/webhook/webhook.go` via `RegisterAllWebhooks`:
 GitHub Actions in `.github/workflows/`:
 - `test.yml` — unit tests + Codecov; separate job for `TestRenderRealManifests`
 - `build.yml` — binary build
-- `lint.yml` — golangci-lint, go vet, kube-linter, helm-lint, chart sync/inventory verify, **verify-manifests** and **verify-generate** (ensure generated code is committed)
+- `lint.yml` — pre-commit, golangci-lint, go vet, go mod verify, kube-linter, helm-lint, chart sync/inventory verify, **verify-manifests** and **verify-generate** (ensure generated code is committed)
 - `e2e.yml` — end-to-end tests on Kind cluster (PRs touching code/Dockerfile)
-- `manifest-sync.yaml` — daily refresh of `opt/manifests/` (opens PR)
+- `govulncheck.yaml` — Go vulnerability scan on push to `main` (also `workflow_dispatch`)
+- `disconnected-readiness.yaml` — airgapped/disconnected readiness check on PRs
+- `operator-chaos-validation.yaml` — operator-chaos shift-left validation (knowledge, CRD diff, upgrade dry-run) on PRs touching `chaos/`, `api/`, `internal/controller/`, or `config/crd/`
+- `manifests-sync-main.yaml` — daily refresh of `opt/manifests/` on `main` (opens PR)
+- `manifests-sync-stable.yaml` — on push to `stable`/`v1.x` (daily on `stable`), commit manifests directly (`bump-shas` on `stable` only; `v1.x` keeps tag pins)
 - `go-directive-updater.yaml` — weekly `go` directive patch bump in `go.mod`
-- `sync-branches.yaml` — manual/workflow_call sync between branches (`main→stable`, `stable→v1.x`); excludes `opt/manifests`
+- `sync-branches.yaml` — manual/workflow_call branch sync (`main→stable`, `stable→v1.x`); keeps target `opt/manifests`, `opt/manifest-sources.sh`, and `.tekton`
 - `tls-lint.yml` — TLS configuration lint (`tls-config-lint`) with SARIF upload
 - `semgrep-tls.yml` — Semgrep TLS compliance rules on PRs
+
+operator-chaos (`chaos/`):
+- ODH and RHOAI have separate profiles (`chaos/profiles/odh/`, `chaos/profiles/rhoai/`) because ImageStream names and operand namespaces differ.
+- Shared experiments under `chaos/experiments/` target the operator Deployment in `workbenches-operator-system`.
+- CI validates, preflights (`--local`), diffs knowledge/CRDs vs the PR base, and dry-runs upgrade simulation. There is no `make test-chaos` target.
+- workbenches-v2 / workspaces-controller is not in the knowledge model yet (optional, default `Removed`).
 
 Dependabot (`.github/dependabot.yml`): weekly GitHub Actions version bumps + Go module security-only updates.
 
@@ -162,7 +175,8 @@ Konflux builds: `.tekton/` PipelineRuns for push and pull request.
 
 - When upstream notebook controller manifests add or rename ClusterRoles, update `config/rbac/rbac_escalate_role.yaml` and run `make chart-sync-rbac`.
 - After changing kubebuilder markers, run `make manifests` and `make chart-sync`.
-- When refreshing upstream manifests, commit `opt/manifests/` together with any `get_all_manifests.sh` source changes.
+- When refreshing upstream manifests, commit `opt/manifests/` together with any `opt/manifest-sources.sh` source changes.
+- When operand Deployments, webhooks, or notebook ImageStreams change, update the matching chaos profile under `chaos/profiles/odh` or `chaos/profiles/rhoai` (do not mix product ImageStream names in one knowledge file).
 - See [DEPENDENCIES.md](DEPENDENCIES.md) for Go version, dependency, and upstream manifest upgrade procedures.
 - Review `OWNERS` for approvers and reviewers. Open pull requests against `main`.
 
@@ -174,4 +188,4 @@ Konflux builds: `.tekton/` PipelineRuns for push and pull request.
 - Tests that use real manifests (`TestRenderRealManifests`) fail without `opt/manifests` present.
 - Creating a `Workbenches` CR named anything other than `default-workbenches` is rejected by CEL.
 - The `config/manager/kustomization.yaml` image reference may contain local overrides — check before committing.
-- Do not invent e2e/upgrade/contrib paths or Makefile targets that are not in this tree; see [DEPENDENCIES.md](DEPENDENCIES.md) for upgrade workflows.
+- Do not invent e2e/upgrade/contrib paths or Makefile targets that are not in this tree (including `make test-chaos`); see [DEPENDENCIES.md](DEPENDENCIES.md) for upgrade workflows.

@@ -7,6 +7,8 @@ on:
     branches: [main, stable, v1.x]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   pre-commit:
     name: pre-commit
@@ -36,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:

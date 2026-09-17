@@ -6,6 +6,8 @@ name: Go Vulnerability Check
     branches: [main]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   govulncheck:
     name: govulncheck

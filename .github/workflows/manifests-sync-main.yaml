@@ -1,8 +1,10 @@
 ---
-# Opens a PR when upstream manifests change. Requires one of:
+# Opens a PR against main when upstream manifests change. Requires one of:
 #   - Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests"
 #   - Repository secret MANIFEST_SYNC_PAT (PAT with repo scope) when the setting above is disabled
-name: Sync upstream manifests
+#
+# Release branches use manifests-sync-stable.yaml (push-triggered, direct commit).
+name: Sync upstream manifests (main)
 
 on:
   schedule:
@@ -24,6 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
         with:
+          ref: main
           persist-credentials: false
 
       - name: Validate GitHub authentication

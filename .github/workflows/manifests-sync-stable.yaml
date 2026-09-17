@@ -1,0 +1,204 @@
+---
+# On each push to stable or v1.x, and daily for stable (schedule runs from
+# the default-branch workflow file and checks out stable explicitly):
+#   1. bump-shas — stable only; update ODH branch@sha pins in
+#      opt/manifest-sources.sh and commit
+#   2. sync-manifests — fetch opt/manifests/, validate, and commit
+#      (v1.x skips bump-shas because pins are tags, not tracking branches)
+#
+# Both jobs commit directly to the branch (no PR). Skips the workflow's own
+# chore(manifests) commits to avoid a push loop. Matrix jobs use
+# fromJSON(... || '[]') because those skipped runs leave outputs.branches
+# empty and GitHub still evaluates strategy.matrix for always() jobs.
+# Direct push requires contents:write (GITHUB_TOKEN or MANIFEST_SYNC_PAT) and
+# branch protection that allows GitHub Actions to push.
+name: Sync upstream manifests (stable/v1.x)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches: [stable, v1.x]
+  workflow_dispatch:
+
+concurrency:
+  group: manifests-sync-${{ github.event_name == 'schedule' && 'stable' || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-branches:
+    if: |
+      github.repository_owner == 'opendatahub-io'
+      && (
+        github.event_name != 'push'
+        || !startsWith(github.event.head_commit.message, 'chore(manifests):')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      branches: ${{ steps.resolve.outputs.branches }}
+      bump: ${{ steps.resolve.outputs.bump }}
+    steps:
+      - name: Resolve target branches
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bump=false
+          if [[ "${EVENT_NAME}" == "schedule" ]]; then
+            # Schedule always uses the default-branch workflow file; bump pins
+            # on stable even when this repo had no commits that day.
+            echo 'branches=["stable"]' >> "${GITHUB_OUTPUT}"
+            bump=true
+          elif [[ "${REF_NAME}" == "stable" ]]; then
+            echo 'branches=["stable"]' >> "${GITHUB_OUTPUT}"
+            bump=true
+          elif [[ "${REF_NAME}" == "v1.x" ]]; then
+            echo 'branches=["v1.x"]' >> "${GITHUB_OUTPUT}"
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo 'branches=["stable"]' >> "${GITHUB_OUTPUT}"
+            bump=true
+          else
+            echo "Refusing to sync unsupported branch '${REF_NAME}' (allowed: stable, v1.x)"
+            exit 1
+          fi
+          echo "bump=${bump}" >> "${GITHUB_OUTPUT}"
+
+  bump-shas:
+    needs: resolve-branches
+    if: |
+      github.repository_owner == 'opendatahub-io'
+      && needs.resolve-branches.result == 'success'
+      && needs.resolve-branches.outputs.bump == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: manifests-sync-bump-${{ matrix.branch }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.resolve-branches.outputs.branches || '[]') }}
+    permissions:
+      contents: write
+    env:
+      BASE_BRANCH: ${{ matrix.branch }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.MANIFEST_SYNC_PAT || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.branch }}
+          persist-credentials: false
+
+      - name: Validate GitHub authentication
+        run: |
+          gh auth status || {
+            echo "Authentication failed — check MANIFEST_SYNC_PAT or GITHUB_TOKEN permissions"
+            exit 1
+          }
+
+      - name: Update ODH branch@sha pins
+        run: bash ci/bump-odh-manifest-shas.sh opt/manifest-sources.sh
+
+      - name: Commit SHA pins
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain -- opt/manifest-sources.sh)" ]; then
+            echo "No SHA pin changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add opt/manifest-sources.sh
+          git commit -m "chore(manifests): bump ODH tracking SHAs"
+          gh auth setup-git
+          git remote set-url origin "https://github.com/${REPO}.git"
+          git pull --rebase origin "${BASE_BRANCH}"
+          git push origin "HEAD:refs/heads/${BASE_BRANCH}"
+          echo "Committed SHA pin updates to ${BASE_BRANCH}."
+
+  sync-manifests:
+    needs: [resolve-branches, bump-shas]
+    if: |
+      always()
+      && !cancelled()
+      && github.repository_owner == 'opendatahub-io'
+      && needs.resolve-branches.result == 'success'
+      && (needs.bump-shas.result == 'success' || needs.bump-shas.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: manifests-sync-${{ matrix.branch }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.resolve-branches.outputs.branches || '[]') }}
+    permissions:
+      contents: write
+    env:
+      BASE_BRANCH: ${{ matrix.branch }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.MANIFEST_SYNC_PAT || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.branch }}
+          persist-credentials: false
+
+      - name: Validate GitHub authentication
+        run: |
+          gh auth status || {
+            echo "Authentication failed — check MANIFEST_SYNC_PAT or GITHUB_TOKEN permissions"
+            exit 1
+          }
+
+      - name: Fast-forward to SHA pin commit
+        if: matrix.branch == 'stable' && needs.bump-shas.result == 'success'
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git remote set-url origin "https://github.com/${REPO}.git"
+          git pull --ff-only origin "${BASE_BRANCH}"
+
+      - name: Fetch upstream manifests
+        env:
+          ODH_PLATFORM_TYPE: OpenDataHub
+        run: bash get_all_manifests.sh
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          check-latest: true
+          go-version-file: go.mod
+
+      - name: Validate manifest rendering
+        run: go test ./internal/controller/ -run TestRenderRealManifests -v -count=1
+
+      - name: Commit manifests
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain -- opt/manifests)" ]; then
+            echo "No manifest changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add opt/manifests
+          git commit -m "chore(manifests): sync upstream component manifests"
+          gh auth setup-git
+          git remote set-url origin "https://github.com/${REPO}.git"
+          git pull --rebase origin "${BASE_BRANCH}"
+          git push origin "HEAD:refs/heads/${BASE_BRANCH}"
+          echo "Committed manifest sync directly to ${BASE_BRANCH}."

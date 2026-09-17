@@ -1,0 +1,397 @@
+# Operator-chaos knowledge model for workbenches-operator (RHOAI / SelfManagedRhoai).
+# ImageStreams and notebook-image ConfigMaps match opt/manifests/workbenches/notebooks/rhoai.
+# Operand namespace is redhat-ods-applications; the operator Deployment stays in
+# workbenches-operator-system.
+# The Open Data Hub variant is chaos/profiles/odh/knowledge/workbenches.yaml.
+operator:
+  name: workbenches-operator
+  namespace: redhat-ods-applications
+  repository: https://github.com/opendatahub-io/workbenches-operator
+
+components:
+  - name: workbenches-operator
+    controller: Workbenches
+    managedResources:
+      - apiVersion: apps/v1
+        kind: Deployment
+        name: workbenches-operator
+        namespace: workbenches-operator-system
+        labels:
+          app.opendatahub.io/workbenches: "true"
+          app.kubernetes.io/part-of: workbenches
+        expectedSpec:
+          replicas: 1
+      - apiVersion: v1
+        kind: ServiceAccount
+        name: workbenches-operator-controller-manager
+        namespace: workbenches-operator-system
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: workbenches-operator-manager-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: workbenches-operator-manager-rolebinding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: workbenches-operator-manager-rbac-escalate-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: workbenches-operator-manager-rbac-escalate-rolebinding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: workbenches-operator-leader-election-role
+        namespace: workbenches-operator-system
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: workbenches-operator-leader-election-rolebinding
+        namespace: workbenches-operator-system
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: workbenches-operator-webhook-tls-role
+        namespace: workbenches-operator-system
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: workbenches-operator-webhook-tls-rolebinding
+        namespace: workbenches-operator-system
+      - apiVersion: v1
+        kind: Service
+        name: workbenches-operator-webhook-service
+        namespace: workbenches-operator-system
+      - apiVersion: admissionregistration.k8s.io/v1
+        kind: MutatingWebhookConfiguration
+        name: workbenches-operator-mutating-webhook-configuration
+    webhooks:
+      - name: connection-notebook.opendatahub.io
+        type: mutating
+        path: /workbenches-connection-notebook
+      - name: hardwareprofile-notebook-injector.opendatahub.io
+        type: mutating
+        path: /workbenches-hardware-profile
+    finalizers:
+      - components.platform.opendatahub.io/workbenches-cleanup
+    steadyState:
+      timeout: "60s"
+      checks:
+        - type: conditionTrue
+          apiVersion: apps/v1
+          kind: Deployment
+          name: workbenches-operator
+          namespace: workbenches-operator-system
+          conditionType: Available
+        - type: resourceExists
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: MutatingWebhookConfiguration
+          name: workbenches-operator-mutating-webhook-configuration
+
+  - name: odh-notebook-controller
+    controller: Workbenches
+    managedResources:
+      - apiVersion: apps/v1
+        kind: Deployment
+        name: odh-notebook-controller-manager
+        namespace: redhat-ods-applications
+        labels:
+          app: odh-notebook-controller
+          app.opendatahub.io/workbenches: "true"
+        expectedSpec:
+          replicas: 1
+      - apiVersion: v1
+        kind: ServiceAccount
+        name: odh-notebook-controller-manager
+        namespace: redhat-ods-applications
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: odh-notebook-controller-manager-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: odh-notebook-controller-manager-rolebinding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: odh-notebook-controller-notebooks-admin
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: odh-notebook-controller-notebooks-edit
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: odh-notebook-controller-notebooks-view
+      - apiVersion: v1
+        kind: Service
+        name: odh-notebook-controller-webhook-service
+        namespace: redhat-ods-applications
+      - apiVersion: admissionregistration.k8s.io/v1
+        kind: MutatingWebhookConfiguration
+        name: odh-notebook-controller-mutating-webhook-configuration
+      - apiVersion: admissionregistration.k8s.io/v1
+        kind: ValidatingWebhookConfiguration
+        name: odh-notebook-controller-validating-webhook-configuration
+    webhooks:
+      - name: notebooks.opendatahub.io
+        type: mutating
+        path: /mutate-notebook-v1
+      - name: notebooks-validation.opendatahub.io
+        type: validating
+        path: /validate-notebook-v1
+    dependencies:
+      - workbenches-operator
+    steadyState:
+      timeout: "60s"
+      checks:
+        - type: conditionTrue
+          apiVersion: apps/v1
+          kind: Deployment
+          name: odh-notebook-controller-manager
+          namespace: redhat-ods-applications
+          conditionType: Available
+        - type: resourceExists
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: MutatingWebhookConfiguration
+          name: odh-notebook-controller-mutating-webhook-configuration
+        - type: resourceExists
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingWebhookConfiguration
+          name: odh-notebook-controller-validating-webhook-configuration
+
+  - name: notebook-controller
+    controller: Workbenches
+    managedResources:
+      - apiVersion: apps/v1
+        kind: Deployment
+        name: notebook-controller-deployment
+        namespace: redhat-ods-applications
+        labels:
+          app.opendatahub.io/workbenches: "true"
+        expectedSpec:
+          replicas: 1
+      - apiVersion: v1
+        kind: ServiceAccount
+        name: notebook-controller-service-account
+        namespace: redhat-ods-applications
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: notebook-controller-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: notebook-controller-role-binding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: notebook-controller-kubeflow-notebooks-admin
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: notebook-controller-kubeflow-notebooks-edit
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: notebook-controller-kubeflow-notebooks-view
+      - apiVersion: v1
+        kind: Service
+        name: notebook-controller-service
+        namespace: redhat-ods-applications
+      - apiVersion: v1
+        kind: ConfigMap
+        name: notebook-controller-config
+        namespace: redhat-ods-applications
+      - apiVersion: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: notebooks.kubeflow.org
+    dependencies:
+      - workbenches-operator
+    steadyState:
+      timeout: "60s"
+      checks:
+        - type: conditionTrue
+          apiVersion: apps/v1
+          kind: Deployment
+          name: notebook-controller-deployment
+          namespace: redhat-ods-applications
+          conditionType: Available
+        - type: resourceExists
+          apiVersion: v1
+          kind: ConfigMap
+          name: notebook-controller-config
+          namespace: redhat-ods-applications
+        - type: resourceExists
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          name: notebooks.kubeflow.org
+
+  - name: notebook-images
+    controller: Workbenches
+    managedResources:
+      - apiVersion: v1
+        kind: ConfigMap
+        name: notebook-image-params
+        namespace: redhat-ods-applications
+      - apiVersion: v1
+        kind: ConfigMap
+        name: notebook-image-commithash
+        namespace: redhat-ods-applications
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: s2i-minimal-notebook
+        namespace: redhat-ods-applications
+        labels:
+          app.opendatahub.io/workbenches: "true"
+          app.kubernetes.io/part-of: workbenches
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: s2i-generic-data-science-notebook
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: minimal-gpu
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: pytorch
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: tensorflow
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: odh-trustyai-notebook
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: code-server-notebook
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: jupyter-rocm-minimal
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: jupyter-rocm-pytorch
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: jupyter-rocm-tensorflow
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: jupyter-pytorch-llmcompressor
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-datascience
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-minimal
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-pytorch
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-rocm-pytorch
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-rocm-tensorflow
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-tensorflow
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-pytorch-llmcompressor
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-datascience-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-minimal-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-pytorch-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-pytorch-llmcompressor-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-rocm-pytorch-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-rocm-tensorflow-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+      - apiVersion: image.openshift.io/v1
+        kind: ImageStream
+        name: runtime-tensorflow-2025-2
+        namespace: redhat-ods-applications
+        labels:
+          opendatahub.io/notebook-image: "true"
+    dependencies:
+      - workbenches-operator
+    steadyState:
+      timeout: "60s"
+      checks:
+        - type: resourceExists
+          apiVersion: v1
+          kind: ConfigMap
+          name: notebook-image-params
+          namespace: redhat-ods-applications
+        - type: resourceExists
+          apiVersion: image.openshift.io/v1
+          kind: ImageStream
+          name: s2i-minimal-notebook
+          namespace: redhat-ods-applications
+
+recovery:
+  reconcileTimeout: "300s"
+  maxReconcileCycles: 10

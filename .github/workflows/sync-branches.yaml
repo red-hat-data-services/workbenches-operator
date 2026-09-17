@@ -49,6 +49,8 @@ on:
         type: boolean
         default: false
 
+permissions: {}
+
 jobs:
   sync-branches:
     runs-on: ubuntu-latest
@@ -143,14 +145,18 @@ jobs:
           fi
 
           #########################################################################
-          # Always keep target branch state for .tekton and opt/manifests
-          # (do not propagate changes from source branch).
-          # Caveats:
+          # Always keep target branch state for .tekton, opt/manifests, and
+          # opt/manifest-sources.sh (do not propagate those from source).
+          # That keeps operand refs/pins branch-specific:
+          #   main → stable  does not replace stable@sha with main's unpinned refs
+          #   stable → v1.x  does not replace v1.x tag pins with stable@sha
+          # get_all_manifests.sh still merges from source so fetch-script fixes
+          # propagate. Caveats:
           # - This applies to any source/target pair using this workflow.
           # - If target does not contain a guarded directory, any merged content
           #   from source will be removed.
           # - This guard exists only in this workflow; manual merges can still
-          #   propagate these directories unless handled similarly.
+          #   propagate these paths unless handled similarly.
 
           for DIR in .tekton opt/manifests; do
             git rm -r -f --cached --ignore-unmatch -- ":/$(echo "${DIR}")"
@@ -162,6 +168,23 @@ jobs:
               git add -A -- ":/$(echo "${DIR}")"
             fi
           done
+
+          # Keep the target operand source map so branch sync does not replace
+          # pins. get_all_manifests.sh still merges from source (script fixes
+          # propagate). If the target does not have this file yet, abort rather
+          # than taking the source-branch maps — add opt/manifest-sources.sh on
+          # stable/v1.x first (with that branch's pins).
+          SOURCES_FILE="opt/manifest-sources.sh"
+          git rm -f --ignore-unmatch -- "${SOURCES_FILE}"
+          if git rev-parse --verify "HEAD:${SOURCES_FILE}" >/dev/null 2>&1; then
+            echo "Keeping target branch version of ${SOURCES_FILE}."
+            git checkout HEAD -- "${SOURCES_FILE}"
+            git add -- "${SOURCES_FILE}"
+          else
+            echo "ERROR: ${TARGET_BRANCH} has no ${SOURCES_FILE}; refusing to copy it from ${SOURCE_BRANCH}."
+            echo "Add that file on ${TARGET_BRANCH} with this branch's pins before running sync-branches."
+            exit 1
+          fi
           #########################################################################
 
           # Known files to resolve conflicts by keeping the target branch version

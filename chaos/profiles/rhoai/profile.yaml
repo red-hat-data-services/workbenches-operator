@@ -1,0 +1,34 @@
+# operator-chaos experiment-generation profile for Red Hat OpenShift AI.
+# Knowledge: knowledge/workbenches.yaml
+name: rhoai
+description: Red Hat OpenShift AI workbenches
+platform: openshift
+
+components:
+  workbenches-operator:
+    namespace: workbenches-operator-system
+    deployment: workbenches-operator
+    component_name: workbenches-operator
+    label_selector: control-plane=controller-manager
+    cluster_role_binding: workbenches-operator-manager-rolebinding
+    webhook_name: workbenches-operator-mutating-webhook-configuration
+    webhook_type: mutating
+    webhook_resource_kind: MutatingWebhookConfiguration
+
+  odh-notebook-controller:
+    namespace: redhat-ods-applications
+    deployment: odh-notebook-controller-manager
+    component_name: odh-notebook-controller
+    label_selector: app=odh-notebook-controller
+    cluster_role_binding: odh-notebook-controller-manager-rolebinding
+    webhook_name: odh-notebook-controller-mutating-webhook-configuration
+    webhook_type: mutating
+    webhook_resource_kind: MutatingWebhookConfiguration
+
+  notebook-controller:
+    namespace: redhat-ods-applications
+    deployment: notebook-controller-deployment
+    component_name: notebook-controller
+    label_selector: app.opendatahub.io/workbenches=true
+    cluster_role_binding: notebook-controller-role-binding
+    config_map_name: notebook-controller-config

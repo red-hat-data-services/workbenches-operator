@@ -1,0 +1,221 @@
+---
+name: Operator Chaos Validation
+"on":
+  pull_request:
+    branches: [main, stable, v1.x]
+    paths:
+      - .github/workflows/operator-chaos-validation.yaml
+      - api/**
+      - internal/controller/**
+      - config/crd/**
+      - chaos/**
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Base ref to compare against for manual runs"
+        required: false
+        default: main
+
+permissions: {}
+
+jobs:
+  operator-chaos:
+    name: operator-chaos shift-left validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          check-latest: true
+          go-version-file: go.mod
+
+      - name: Install operator-chaos
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          # Pin to operator-chaos main (2026-06-16); @latest would let CI drift unsigned.
+          GOBIN="${RUNNER_TEMP}/bin" go install github.com/opendatahub-io/operator-chaos/cmd/operator-chaos@edb1c045f677e376324635ebb9b8b52241458ca0
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Checkout base branch assets
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.base_ref || github.event.repository.default_branch }}
+          path: base-branch
+          persist-credentials: false
+          sparse-checkout: |
+            chaos/knowledge
+            chaos/profiles
+            config/crd/bases/components.platform.opendatahub.io_workbenches.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Validate knowledge models
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(chaos/profiles/*/knowledge/*.yaml)
+          if (( ${#files[@]} == 0 )); then
+            echo "No knowledge models found under chaos/profiles/*/knowledge/"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Validating ${f}..."
+            operator-chaos validate --knowledge "${f}"
+          done
+
+      - name: Validate experiment definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in chaos/experiments/*.yaml; do
+            echo "Validating ${f}..."
+            operator-chaos validate "${f}"
+          done
+
+      - name: Run local preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(chaos/profiles/*/knowledge/*.yaml)
+          if (( ${#files[@]} == 0 )); then
+            echo "No knowledge models found under chaos/profiles/*/knowledge/"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Preflight ${f}..."
+            operator-chaos preflight --knowledge "${f}" --local
+          done
+
+      - name: Diff knowledge models
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          output_dir="${RUNNER_TEMP}/operator-chaos"
+          mkdir -p "${output_dir}"
+          total_breaking=0
+          any_diff=0
+
+          for profile_dir in chaos/profiles/*/; do
+            profile="$(basename "${profile_dir}")"
+            target="${profile_dir}knowledge"
+            [[ -d "${target}" ]] || continue
+
+            source="base-branch/chaos/profiles/${profile}/knowledge"
+            if [[ ! -d "${source}" ]]; then
+              # Migration fallback: the original layout kept a single ODH model at chaos/knowledge.
+              if [[ "${profile}" == "odh" && -d "base-branch/chaos/knowledge" ]]; then
+                source="base-branch/chaos/knowledge"
+              else
+                echo "No base knowledge for profile ${profile}; skipping knowledge diff (bootstrap)."
+                continue
+              fi
+            fi
+
+            any_diff=1
+            echo "Diffing ${profile} knowledge (${source} -> ${target})"
+            knowledge_diff_json="${output_dir}/knowledge-diff-${profile}.json"
+            operator-chaos diff \
+              --source "${source}" \
+              --target "${target}" \
+              --breaking \
+              --format json > "${knowledge_diff_json}"
+            operator-chaos diff \
+              --source "${source}" \
+              --target "${target}" \
+              --breaking
+
+            breaking=$(jq -r '.summary.breakingChanges // 0' "${knowledge_diff_json}")
+            total_breaking=$((total_breaking + breaking))
+          done
+
+          if [[ "${any_diff}" -eq 0 ]]; then
+            echo "No base knowledge models found; skipping knowledge diff for bootstrap PR."
+            exit 0
+          fi
+          if (( total_breaking > 0 )); then
+            echo "operator-chaos detected ${total_breaking} breaking knowledge change(s)."
+            exit 1
+          fi
+
+      - name: Diff Workbenches CRD schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_crd="base-branch/config/crd/bases/components.platform.opendatahub.io_workbenches.yaml"
+          target_crd="config/crd/bases/components.platform.opendatahub.io_workbenches.yaml"
+          if [[ ! -f "${source_crd}" || ! -f "${target_crd}" ]]; then
+            echo "Base or current Workbenches CRD not found; skipping CRD diff for bootstrap PR."
+            exit 0
+          fi
+
+          output_dir="${RUNNER_TEMP}/operator-chaos"
+          mkdir -p "${output_dir}"
+          source_dir="${output_dir}/source-crds"
+          target_dir="${output_dir}/target-crds"
+          crd_diff_json="${output_dir}/crd-diff.json"
+          rm -rf "${source_dir}" "${target_dir}"
+          mkdir -p "${source_dir}" "${target_dir}"
+          cp "${source_crd}" "${source_dir}/"
+          cp "${target_crd}" "${target_dir}/"
+
+          operator-chaos diff-crds \
+            --source-crds "${source_dir}" \
+            --target-crds "${target_dir}" \
+            --format json > "${crd_diff_json}"
+          operator-chaos diff-crds \
+            --source-crds "${source_dir}" \
+            --target-crds "${target_dir}"
+
+          crd_breaking=$(jq -r '
+            reduce ((.crds // [])[]?.apiVersions[]?.schemaChanges[]?) as $change
+              (0; if ($change.severity | ascii_downcase) == "breaking" then . + 1 else . end)
+          ' "${crd_diff_json}")
+          if (( crd_breaking > 0 )); then
+            echo "operator-chaos detected ${crd_breaking} breaking CRD schema change(s)."
+            exit 1
+          fi
+
+      - name: Preview upgrade simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          any_sim=0
+
+          for profile_dir in chaos/profiles/*/; do
+            profile="$(basename "${profile_dir}")"
+            target="${profile_dir}knowledge"
+            [[ -d "${target}" ]] || continue
+
+            source="base-branch/chaos/profiles/${profile}/knowledge"
+            if [[ ! -d "${source}" ]]; then
+              if [[ "${profile}" == "odh" && -d "base-branch/chaos/knowledge" ]]; then
+                source="base-branch/chaos/knowledge"
+              else
+                echo "No base knowledge for profile ${profile}; skipping simulate-upgrade (bootstrap)."
+                continue
+              fi
+            fi
+
+            any_sim=1
+            echo "Simulating upgrade for ${profile} (${source} -> ${target})"
+            operator-chaos simulate-upgrade \
+              --source "${source}" \
+              --target "${target}" \
+              --dry-run
+          done
+
+          if [[ "${any_sim}" -eq 0 ]]; then
+            echo "No base knowledge models found; skipping simulate-upgrade for bootstrap PR."
+          fi
