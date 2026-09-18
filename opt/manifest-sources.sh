@@ -14,16 +14,16 @@
 
 # ODH (upstream) Component Manifests
 declare -A ODH_COMPONENT_MANIFESTS=(
-    ["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-15@9945627f2bbc1fd37c36c528bf41b9d1589d0561:components/notebook-controller/config"
-    ["workbenches/odh-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-15@9945627f2bbc1fd37c36c528bf41b9d1589d0561:components/odh-notebook-controller/config"
-    ["workbenches/notebooks"]="opendatahub-io:notebooks:v1.48.0@fb31a5a15294d30dbd00043558d9fb3a637fd22a:manifests"
-    ["workbenches/workspaces-controller"]="opendatahub-io:workbenches:v2.0.0@c068896fd61b55eedd13ae8daa869a1bf12024f8:workspaces/controller/manifests/kustomize"
+    ["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-16@bda4ebbcf09d2a3961b5bf900250a5083f73058c:components/notebook-controller/config"
+    ["workbenches/odh-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-16@bda4ebbcf09d2a3961b5bf900250a5083f73058c:components/odh-notebook-controller/config"
+    ["workbenches/notebooks"]="opendatahub-io:notebooks:v1.49.0@7b87e8f1c76ea299aa66a3e72a42a5c108666b1e:manifests"
+    ["workbenches/workspaces-controller"]="opendatahub-io:workbenches:v2.0.1@baf4bba731f6f3385adcbc8d7bdba2681bba1bb9:workspaces/controller/manifests/kustomize"
 )
 
 # RHOAI (downstream) Component Manifests
 declare -A RHOAI_COMPONENT_MANIFESTS=(
-    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@4c3a7ee2d1a7a9c0e55ed5c9d7e7fe3fead563f8:components/notebook-controller/config"
-    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@4c3a7ee2d1a7a9c0e55ed5c9d7e7fe3fead563f8:components/odh-notebook-controller/config"
-    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6-ea.2@ca3d14d9aa77289b32bda42ac82807b89b482e34:manifests"
-    ["workbenches/workspaces-controller"]="red-hat-data-services:workbenches:rhoai-3.6-ea.2@a9068f7c894055eb28b00bef551b188b60156744:workspaces/controller/manifests/kustomize"
+    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@238fb6654697ec7091d97d5c05dd44cedbc12989:components/notebook-controller/config"
+    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@238fb6654697ec7091d97d5c05dd44cedbc12989:components/odh-notebook-controller/config"
+    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6-ea.2@b57ac85355f25ea465f43969c71f5d8bd09e7557:manifests"
+    ["workbenches/workspaces-controller"]="red-hat-data-services:workbenches:rhoai-3.6-ea.2@83f98c630342561bb30df3529b04de7a2c16c8a7:workspaces/controller/manifests/kustomize"
 )
