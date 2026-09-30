@@ -40,6 +40,7 @@ func registerLifecycleTests() {
 	registerDriftRecoveryTests()
 	registerManagementStateTests()
 	registerOperandHealthTests()
+	registerSSAOwnershipTests()
 }
 
 func registerOperatorDeploymentTests() {
