@@ -22,8 +22,8 @@ declare -A ODH_COMPONENT_MANIFESTS=(
 
 # RHOAI (downstream) Component Manifests
 declare -A RHOAI_COMPONENT_MANIFESTS=(
-    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@238fb6654697ec7091d97d5c05dd44cedbc12989:components/notebook-controller/config"
-    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6-ea.2@238fb6654697ec7091d97d5c05dd44cedbc12989:components/odh-notebook-controller/config"
-    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6-ea.2@b57ac85355f25ea465f43969c71f5d8bd09e7557:manifests"
-    ["workbenches/workspaces-controller"]="red-hat-data-services:workbenches:rhoai-3.6-ea.2@83f98c630342561bb30df3529b04de7a2c16c8a7:workspaces/controller/manifests/kustomize"
+    ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6@2bb8164660cae82f8c99453196d5014a537f1546:components/notebook-controller/config"
+    ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6@2bb8164660cae82f8c99453196d5014a537f1546:components/odh-notebook-controller/config"
+    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6@ac6bd5a306abb34362af6aa5895b6177a3d87949:manifests"
+    ["workbenches/workspaces-controller"]="red-hat-data-services:workbenches:rhoai-3.6@13fb02054a8b1df1c5d06603da38d343c701705f:workspaces/controller/manifests/kustomize"
 )
