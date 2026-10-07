@@ -734,6 +734,195 @@ func TestApplyObjectsSetsOwnerReferences(t *testing.T) {
 	}
 }
 
+func TestStripAggregatedClusterRoleRules(t *testing.T) {
+	t.Parallel()
+
+	notebookRule := []any{
+		map[string]any{
+			"apiGroups": []any{"kubeflow.org"},
+			"resources": []any{"notebooks"},
+			"verbs":     []any{"get", "list"},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		obj         *unstructured.Unstructured
+		wantRules   bool
+		wantAggRule bool
+	}{
+		{
+			name:        "removes empty rules when aggregationRule is set",
+			obj:         clusterRoleForTest(t, "notebooks-admin", true, []any{}),
+			wantRules:   false,
+			wantAggRule: true,
+		},
+		{
+			name:        "removes populated rules when aggregationRule is set",
+			obj:         clusterRoleForTest(t, "notebooks-admin", true, notebookRule),
+			wantRules:   false,
+			wantAggRule: true,
+		},
+		{
+			name:        "keeps rules when aggregationRule is absent",
+			obj:         clusterRoleForTest(t, "notebooks-edit", false, notebookRule),
+			wantRules:   true,
+			wantAggRule: false,
+		},
+		{
+			name: "leaves non-ClusterRoles unchanged",
+			obj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetKind(kindDeployment)
+				obj.SetName("notebook-controller")
+				if err := unstructured.SetNestedSlice(obj.Object, notebookRule, "rules"); err != nil {
+					t.Fatalf("set rules: %v", err)
+				}
+
+				return obj
+			}(),
+			wantRules:   true,
+			wantAggRule: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := stripAggregatedClusterRoleRules(tt.obj); err != nil {
+				t.Fatalf("stripAggregatedClusterRoleRules() error = %v", err)
+			}
+
+			_, gotRules, err := unstructured.NestedFieldNoCopy(tt.obj.Object, "rules")
+			if err != nil {
+				t.Fatalf("rules lookup: %v", err)
+			}
+
+			if gotRules != tt.wantRules {
+				t.Errorf("rules present = %v, want %v", gotRules, tt.wantRules)
+			}
+
+			_, gotAgg, err := unstructured.NestedFieldNoCopy(tt.obj.Object, "aggregationRule")
+			if err != nil {
+				t.Fatalf("aggregationRule lookup: %v", err)
+			}
+
+			if gotAgg != tt.wantAggRule {
+				t.Errorf("aggregationRule present = %v, want %v", gotAgg, tt.wantAggRule)
+			}
+		})
+	}
+}
+
+func TestApplyObjectsStripsAggregatedClusterRoleRules(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(componentsv1alpha1.AddToScheme(scheme))
+
+	owner := &componentsv1alpha1.Workbenches{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: componentsv1alpha1.WorkbenchesInstanceName,
+			UID:  "owner-uid-agg",
+		},
+	}
+
+	admin := clusterRoleForTest(t, "odh-notebook-controller-notebooks-admin", true, []any{})
+	edit := clusterRoleForTest(t, "odh-notebook-controller-notebooks-edit", false, []any{
+		map[string]any{
+			"apiGroups": []any{"kubeflow.org"},
+			"resources": []any{"notebooks"},
+			"verbs":     []any{"get"},
+		},
+	})
+
+	var patched []unstructured.Unstructured
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(_ context.Context, _ client.WithWatch, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				u, ok := obj.(*unstructured.Unstructured)
+				if !ok {
+					t.Fatalf("expected unstructured, got %T", obj)
+				}
+				patched = append(patched, *u.DeepCopy())
+
+				return nil
+			},
+		}).
+		Build()
+
+	reconciler := &WorkbenchesReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+
+	if err := reconciler.applyObjects(context.Background(), owner, []*unstructured.Unstructured{admin, edit}); err != nil {
+		t.Fatalf("applyObjects() error = %v", err)
+	}
+
+	if len(patched) != 2 {
+		t.Fatalf("patched len = %d, want 2", len(patched))
+	}
+
+	byName := map[string]unstructured.Unstructured{}
+	for _, obj := range patched {
+		byName[obj.GetName()] = obj
+	}
+
+	appliedAdmin := byName["odh-notebook-controller-notebooks-admin"]
+	if _, found, err := unstructured.NestedFieldNoCopy(appliedAdmin.Object, "rules"); err != nil || found {
+		t.Fatalf("aggregated ClusterRole rules found=%v err=%v, want absent", found, err)
+	}
+
+	if _, found, err := unstructured.NestedFieldNoCopy(appliedAdmin.Object, "aggregationRule"); err != nil || !found {
+		t.Fatalf("aggregated ClusterRole aggregationRule found=%v err=%v, want present", found, err)
+	}
+
+	if len(appliedAdmin.GetOwnerReferences()) != 1 {
+		t.Fatalf("admin ownerRefs len = %d, want 1", len(appliedAdmin.GetOwnerReferences()))
+	}
+
+	if appliedAdmin.GetLabels()[metadata.ComponentLabelKey] != metadata.LabelTrue {
+		t.Fatal("admin ClusterRole missing component label")
+	}
+
+	appliedEdit := byName["odh-notebook-controller-notebooks-edit"]
+	if _, found, err := unstructured.NestedFieldNoCopy(appliedEdit.Object, "rules"); err != nil || !found {
+		t.Fatalf("edit ClusterRole rules found=%v err=%v, want present", found, err)
+	}
+}
+
+func clusterRoleForTest(t *testing.T, name string, aggregated bool, rules []any) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("rbac.authorization.k8s.io/v1")
+	obj.SetKind(kindClusterRole)
+	obj.SetName(name)
+
+	if aggregated {
+		if err := unstructured.SetNestedField(obj.Object, map[string]any{
+			"clusterRoleSelectors": []any{
+				map[string]any{"matchLabels": map[string]any{"aggregate": "true"}},
+			},
+		}, "aggregationRule"); err != nil {
+			t.Fatalf("set aggregationRule: %v", err)
+		}
+	}
+
+	if rules != nil {
+		if err := unstructured.SetNestedSlice(obj.Object, rules, "rules"); err != nil {
+			t.Fatalf("set rules: %v", err)
+		}
+	}
+
+	return obj
+}
+
 func TestApplyObjectsPreservesDeploymentCustomizations(t *testing.T) {
 	t.Parallel()
 
@@ -1308,6 +1497,124 @@ func TestRenderRealManifests(t *testing.T) {
 
 						t.Logf("rendered %d objects", len(objects))
 					})
+				}
+			})
+		}
+	}
+}
+
+// TestRenderedAggregatedClusterRolesOmitRules renders the committed manifests and
+// checks that every ClusterRole with aggregationRule loses .rules before SSA.
+// A point-in-time managedFields snapshot is not enough: applying rules, even as
+// an empty list, makes workbenches-operator fight clusterrole-aggregation-controller.
+func TestRenderedAggregatedClusterRolesOmitRules(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	basePath := filepath.Join(repoRoot, "opt", "manifests")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		t.Fatalf("opt/manifests not found — run 'make manifests-fetch' and commit the result")
+	}
+
+	params := map[string]string{
+		paramSectionTitle:  "Test",
+		paramMLflowEnabled: "false",
+		paramGatewayURL:    "",
+	}
+
+	requiredAggregated := map[bool][]string{
+		false: {
+			"notebook-controller-kubeflow-notebooks-admin",
+			"odh-notebook-controller-notebooks-admin",
+		},
+		true: {
+			"notebook-controller-kubeflow-notebooks-admin",
+			"odh-notebook-controller-notebooks-admin",
+			"kubeflow-workspaces-admin",
+			"kubeflow-workspaces-edit",
+			"kubeflow-workspaces-view",
+			"workspaces-admin",
+		},
+	}
+
+	for _, p := range []string{platform.OpenDataHub, platform.SelfManagedRhoai} {
+		for _, v2Managed := range []bool{false, true} {
+			testName := p
+			if v2Managed {
+				testName += "-workbenchesV2Managed"
+			}
+
+			t.Run(testName, func(t *testing.T) {
+				groups := manifestGroupsForPlatform(p, v2Managed)
+				workDir := t.TempDir()
+
+				if err := copyDir(filepath.Join(basePath, "workbenches"), filepath.Join(workDir, "workbenches")); err != nil {
+					t.Fatalf("copyDir() failed: %v", err)
+				}
+
+				seen := map[string]*unstructured.Unstructured{}
+
+				for _, group := range groups {
+					objects, err := renderKustomize(filepath.Join(workDir, group), params)
+					if err != nil {
+						t.Fatalf("renderKustomize(%s) failed: %v", group, err)
+					}
+
+					for _, obj := range objects {
+						if obj.GetKind() != kindClusterRole {
+							continue
+						}
+
+						seen[obj.GetName()] = obj
+					}
+				}
+
+				aggregated := 0
+
+				for name, obj := range seen {
+					_, hasAgg, err := unstructured.NestedFieldNoCopy(obj.Object, "aggregationRule")
+					if err != nil {
+						t.Fatalf("%s aggregationRule lookup: %v", name, err)
+					}
+
+					if stripErr := stripAggregatedClusterRoleRules(obj); stripErr != nil {
+						t.Fatalf("stripAggregatedClusterRoleRules(%s) error = %v", name, stripErr)
+					}
+
+					_, hasRules, err := unstructured.NestedFieldNoCopy(obj.Object, "rules")
+					if err != nil {
+						t.Fatalf("%s rules lookup: %v", name, err)
+					}
+
+					if hasAgg {
+						aggregated++
+
+						if hasRules {
+							t.Errorf("%s still has .rules after strip; SSA would claim the aggregation controller's field", name)
+						}
+
+						continue
+					}
+
+					if !hasRules {
+						t.Errorf("%s has no aggregationRule and no .rules", name)
+					}
+				}
+
+				if aggregated == 0 {
+					t.Fatal("rendered no aggregated ClusterRoles")
+				}
+
+				for _, name := range requiredAggregated[v2Managed] {
+					obj, ok := seen[name]
+					if !ok {
+						t.Errorf("required aggregated ClusterRole %s was not rendered", name)
+
+						continue
+					}
+
+					if _, hasAgg, _ := unstructured.NestedFieldNoCopy(obj.Object, "aggregationRule"); !hasAgg {
+						t.Errorf("%s is required to use aggregationRule", name)
+					}
 				}
 			})
 		}

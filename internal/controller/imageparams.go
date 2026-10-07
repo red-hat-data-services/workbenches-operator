@@ -54,8 +54,10 @@ var imageParamMap = map[string]string{
 
 	// CodeServer workbench (latest / -n tag)
 	"odh-workbench-codeserver-datascience-cpu-py312-ubi9-n": "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_DATASCIENCE_CPU_PY312_IMAGE",
+	"odh-workbench-codeserver-baseline-cpu-py312-c9s-n":     "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_BASELINE_CPU_PY312_C9S_IMAGE",
 
 	// Jupyter workbenches (latest / -n tags)
+	"odh-workbench-jupyter-baseline-cpu-py312-c9s-n":                "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_BASELINE_CPU_PY312_C9S_IMAGE",
 	"odh-workbench-jupyter-datascience-cpu-py312-ubi9-n":            "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_DATASCIENCE_CPU_PY312_IMAGE",
 	"odh-workbench-jupyter-minimal-cpu-py312-ubi9-n":                "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_CPU_PY312_IMAGE",
 	"odh-workbench-jupyter-minimal-cuda-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_CUDA_PY312_IMAGE",
@@ -68,6 +70,7 @@ var imageParamMap = map[string]string{
 	"odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n": "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_PYTORCH_LLMCOMPRESSOR_CUDA_PY312_IMAGE",
 
 	// Pipeline runtimes (latest / -n tags)
+	"odh-pipeline-runtime-baseline-cpu-py312-c9s-n":                "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_BASELINE_CPU_PY312_C9S_IMAGE",
 	"odh-pipeline-runtime-datascience-cpu-py312-ubi9-n":            "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_DATASCIENCE_CPU_PY312_IMAGE",
 	"odh-pipeline-runtime-minimal-cpu-py312-ubi9-n":                "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_MINIMAL_CPU_PY312_IMAGE",
 	"odh-pipeline-runtime-tensorflow-cuda-py312-ubi9-n":            "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_TENSORFLOW_CUDA_PY312_IMAGE",
