@@ -46,7 +46,7 @@ chaos/                          operator-chaos knowledge models (profiles/odh, p
 ci/                             Go directive bump + ODH manifest SHA pin helpers
 hack/                           Boilerplate + Helm chart sync/verify scripts
 .github/workflows/              CI (test, build, lint, e2e, govulncheck, disconnected-readiness, operator-chaos, manifests-sync-main/stable, sync-branches, TLS lint, Semgrep)
-.github/dependabot.yml          Dependabot: weekly GHA bumps + Go security updates
+renovate.json                   MintMaker: weekly GHA bumps + Go security-only updates
 .pre-commit-config.yaml         pre-commit hooks (golangci-lint skipped in CI; dedicated lint job exists)
 semgrep.yaml                    Semgrep TLS compliance rules
 .gitleaks.toml                  Secret scanning configuration (gitleaks)
@@ -150,6 +150,7 @@ GitHub Actions in `.github/workflows/`:
 - `test.yml` — unit tests + Codecov; separate job for `TestRenderRealManifests`
 - `build.yml` — binary build
 - `lint.yml` — pre-commit, golangci-lint, go vet, go mod verify, kube-linter, helm-lint, chart sync/inventory verify, **verify-manifests** and **verify-generate** (ensure generated code is committed)
+- `renovate-config.yml` — `renovate-config-validator --strict` on PRs that touch `renovate.json` (or this workflow)
 - `e2e.yml` — end-to-end tests on Kind cluster (PRs touching code/Dockerfile)
 - `govulncheck.yaml` — Go vulnerability scan on push to `main` (also `workflow_dispatch`)
 - `disconnected-readiness.yaml` — airgapped/disconnected readiness check on PRs
@@ -167,7 +168,7 @@ operator-chaos (`chaos/`):
 - CI validates, preflights (`--local`), diffs knowledge/CRDs vs the PR base, and dry-runs upgrade simulation. There is no `make test-chaos` target.
 - workbenches-v2 / workspaces-controller is not in the knowledge model yet (optional, default `Removed`).
 
-Dependabot (`.github/dependabot.yml`): weekly GitHub Actions version bumps + Go module security-only updates.
+MintMaker (`renovate.json`): weekly GitHub Actions version bumps + Go module security-only updates (PRs from `red-hat-konflux[bot]`). Takes effect when MintMaker is enabled on the Konflux component. Do not also enable Dependabot for the same ecosystems.
 
 Konflux builds: `.tekton/` PipelineRuns for push and pull request.
 

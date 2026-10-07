@@ -26,8 +26,10 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 
-# GH_TOKEN / GITHUB_TOKEN avoid unauthenticated git ls-remote rate limits in CI.
-export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+# Authenticated ls-remote is optional (rate limits). Never fall back to
+# GITHUB_TOKEN: it is scoped to this repository and git ls-remote of other
+# public remotes (kubeflow, notebooks, workbenches) fails with exit 128.
+# A PAT in MANIFEST_SYNC_PAT or GH_TOKEN (when it is not an Actions token) is OK.
 
 python3 - "${SCRIPT_FILE}" <<'PY'
 import os
@@ -47,7 +49,10 @@ pin_re = re.compile(
     r"(?P<branch>[A-Za-z0-9._/-]+)@(?P<sha>[0-9a-f]{7,40}):"
 )
 safe_ref = re.compile(r"^[A-Za-z0-9._/-]+$")
-token = os.environ.get("GH_TOKEN", "")
+token = (os.environ.get("MANIFEST_SYNC_PAT") or os.environ.get("GH_TOKEN") or "").strip()
+# GitHub Actions installation tokens (ghs_) 403 git access to other repos.
+if token.startswith("ghs_"):
+    token = ""
 resolved: dict[tuple[str, str, str], str] = {}
 updated = False
 
@@ -69,10 +74,20 @@ def head_sha(org: str, repo: str, branch: str) -> str:
     if token:
         cmd = ["git", "-c", f"http.extraheader=AUTHORIZATION: bearer {token}", *cmd[1:]]
     print(f"Resolving latest SHA for {org}/{repo} branch {branch}...")
-    out = subprocess.check_output(cmd, text=True).strip()
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    out = proc.stdout.strip()
+    err = proc.stderr.strip()
+    if proc.returncode != 0:
+        detail = err or out
+        raise SystemExit(
+            f"git ls-remote failed for {org}/{repo} refs/heads/{branch}: {detail}"
+        )
     sha = out.split()[0] if out else ""
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise SystemExit(f"failed to resolve SHA for {org}/{repo} refs/heads/{branch}")
+        extra = f" stderr={err!r}" if err else ""
+        raise SystemExit(
+            f"failed to resolve SHA for {org}/{repo} refs/heads/{branch}: {out!r}{extra}"
+        )
     resolved[key] = sha
     return sha
 
