@@ -105,7 +105,16 @@ jobs:
           }
 
       - name: Update ODH branch@sha pins
-        run: bash ci/bump-odh-manifest-shas.sh opt/manifest-sources.sh
+        env:
+          # PAT is optional (rate limits). Do not pass GITHUB_TOKEN: it 403s
+          # git ls-remote of other public remotes. Schedule checks out stable,
+          # so also unset GITHUB_TOKEN in the shell for the copy of this helper
+          # that still falls back to GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.MANIFEST_SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          unset GITHUB_TOKEN
+          bash ci/bump-odh-manifest-shas.sh opt/manifest-sources.sh
 
       - name: Commit SHA pins
         run: |

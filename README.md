@@ -361,6 +361,7 @@ Most workflows run on pushes and PRs to `main`, `stable`, and `v1.x`. Manifest s
 | [`test.yml`](.github/workflows/test.yml) | Unit tests and manifest rendering validation |
 | [`build.yml`](.github/workflows/build.yml) | `make build` |
 | [`lint.yml`](.github/workflows/lint.yml) | pre-commit, golangci-lint, go vet, go mod verify, kube-linter, Helm lint, chart sync checks, verify-manifests, verify-generate |
+| [`renovate-config.yml`](.github/workflows/renovate-config.yml) | Validate `renovate.json` (`renovate-config-validator --strict`); path-filtered |
 | [`e2e.yml`](.github/workflows/e2e.yml) | End-to-end tests on Kind cluster |
 | [`govulncheck.yaml`](.github/workflows/govulncheck.yaml) | Go vulnerability scan on push to `main` (also `workflow_dispatch`) |
 | [`disconnected-readiness.yaml`](.github/workflows/disconnected-readiness.yaml) | Airgapped/disconnected readiness check on PRs |
@@ -374,7 +375,7 @@ Most workflows run on pushes and PRs to `main`, `stable`, and `v1.x`. Manifest s
 
 Coverage is uploaded to Codecov ([`codecov.yml`](codecov.yml)).
 
-[Dependabot](.github/dependabot.yml) is configured for weekly GitHub Actions version bumps and Go module security-only updates.
+[MintMaker](https://konflux-ci.dev/docs/mintmaker/user/) (Konflux Renovate) is configured in [`renovate.json`](renovate.json) for weekly GitHub Actions version bumps and Go module security-only updates. Pull requests come from `red-hat-konflux[bot]`. This overlay restricts `enabledManagers` to `gomod` and `github-actions` so the global MintMaker defaults (Dockerfiles, Tekton, routine Go version bumps, and so on) do not apply. MintMaker only runs when it is enabled on the Konflux component (`odh-workbenches-operator-ci`).
 
 Local hygiene hooks live in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (`golangci-lint` is skipped in CI because `lint.yml` already runs it).
 
@@ -382,7 +383,7 @@ Security scanning: [gitleaks](.gitleaks.toml) for secret detection, [Semgrep](se
 
 ### Konflux / Tekton
 
-Pipelines in [`.tekton/`](.tekton/) build and publish the operator image via Konflux. Builds are hermetic: they consume committed `opt/manifests/` rather than cloning upstream at build time.
+Pipelines in [`.tekton/`](.tekton/) build and publish the operator image via Konflux. Builds are hermetic: they consume committed `opt/manifests/` rather than cloning upstream at build time. Dependency updates (GitHub Actions + Go security) are handled by MintMaker when enabled on the Konflux component; see [`renovate.json`](renovate.json).
 
 Branch sync keeps the target `.tekton/` directory, so do not copy branch-specific tags from this README. The live trigger and `output-image` are in those PipelineRuns. Typical mapping:
 
@@ -425,7 +426,7 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 │   ├── manifest-sources.sh    # Per-branch operand org/repo/ref map
 │   └── manifests/             # Committed upstream manifests (hermetic builds)
 ├── hack/                      # Chart sync/verify scripts
-├── .github/dependabot.yml     # Dependabot config (GHA + Go security)
+├── renovate.json              # MintMaker config (GHA + Go security)
 ├── .gitleaks.toml             # Secret scanning configuration (gitleaks)
 ├── .pre-commit-config.yaml    # pre-commit hooks (CI + local)
 ├── semgrep.yaml               # Semgrep TLS compliance rules

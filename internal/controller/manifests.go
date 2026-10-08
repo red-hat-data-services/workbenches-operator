@@ -47,6 +47,7 @@ import (
 
 const (
 	fieldOwner                        = "workbenches-operator"
+	kindClusterRole                   = "ClusterRole"
 	kindDeployment                    = "Deployment"
 	kindService                       = "Service"
 	workspaceKindImageParamsConfigMap = "workspacekind-image-params"
@@ -386,6 +387,10 @@ func writeParamsEnv(fSys filesys.FileSystem, kustomizeDir string, params map[str
 // For Deployments, live container resources and replicas are merged onto the rendered
 // manifest before SSA unless the live object has opendatahub.io/managed=true (parity with
 // the former in-tree workbenches deploy.MergeDeployments path).
+//
+// Aggregated ClusterRoles drop .rules before SSA. The aggregation controller owns that
+// field; applying rules (including an empty list) with ForceOwnership fights it and
+// requeues this controller on every rewrite.
 func (r *WorkbenchesReconciler) applyObjects(
 	ctx context.Context,
 	owner *componentsv1alpha1.Workbenches,
@@ -412,6 +417,11 @@ func (r *WorkbenchesReconciler) applyObjects(
 				obj.GetNamespace(), obj.GetName(), err)
 		}
 
+		if err := stripAggregatedClusterRoleRules(obj); err != nil {
+			return fmt.Errorf("failed to strip aggregated ClusterRole rules for %s: %w",
+				obj.GetName(), err)
+		}
+
 		obj.SetManagedFields(nil)
 
 		//nolint:staticcheck // client.Apply via Patch is the correct pattern for unstructured SSA
@@ -435,6 +445,35 @@ func (r *WorkbenchesReconciler) applyObjects(
 			"name", obj.GetName(),
 			"namespace", obj.GetNamespace())
 	}
+
+	return nil
+}
+
+// stripAggregatedClusterRoleRules removes .rules from a ClusterRole that has an
+// aggregationRule so Server-Side Apply does not claim that field.
+//
+// clusterrole-aggregation-controller owns .rules and force-applies the aggregated
+// policy. Including rules in our apply — even as an empty list — records
+// workbenches-operator as the field manager. The aggregation controller then
+// rewrites .rules, the Owns(ClusterRole) watch requeues, and the next reconcile
+// applies again. Omitting the field releases any previous ownership on upgrade.
+//
+// ClusterRoles without aggregationRule are unchanged. Non-ClusterRoles are unchanged.
+func stripAggregatedClusterRoleRules(obj *unstructured.Unstructured) error {
+	if obj.GetKind() != kindClusterRole {
+		return nil
+	}
+
+	_, found, err := unstructured.NestedFieldNoCopy(obj.Object, "aggregationRule")
+	if err != nil {
+		return fmt.Errorf("failed to inspect aggregationRule: %w", err)
+	}
+
+	if !found {
+		return nil
+	}
+
+	unstructured.RemoveNestedField(obj.Object, "rules")
 
 	return nil
 }

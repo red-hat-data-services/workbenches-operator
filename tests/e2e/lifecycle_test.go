@@ -42,6 +42,7 @@ func registerLifecycleTests() {
 	registerMLflowIntegrationTests()
 	registerDriftRecoveryTests()
 	registerOperandHealthTests()
+	registerSSAOwnershipTests()
 	registerPlatformConfigTests()
 	registerServiceHealthTests()
 	registerUpgradeTests()
