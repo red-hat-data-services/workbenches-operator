@@ -135,10 +135,15 @@ The Helm chart value `webhooks.tlsProvider` (`openshift`, `certmanager`, or `""`
 | `managementState` | `Managed` (default) or `Removed` |
 | `workbenchNamespace` | Legacy JupyterHub-era notebooks namespace. Immutable after creation. **Not used** for module operand deploy. |
 | `gatewayDomain` | Data science gateway domain. Typically projected by the orchestrator from `GatewayConfig`. Injected as `gateway-url` into operand manifests. |
+| `ingresses` | Optional orchestrator-projected Gateway assignments. Each entry requires `name`, `gatewayName`, and `gatewayNamespace`; `hostname` and `isDefault` are optional. Names must be unique and at most 63 characters. At most one entry can be the default. |
 | `platform` | `OpenDataHub` or `SelfManagedRhoai`. Typically projected by the orchestrator. Controls notebooks overlay and UI `section-title`. |
 | `mlflowEnabled` | Whether MLflow integration is active. Typically projected by the orchestrator. Injected as `mlflow-enabled` into operand manifests. |
 
 Notebook-controller operands and the platform ConfigMap (`odh-workbenches-config`) always target the **resolved applications namespace**: `APPLICATIONS_NAMESPACE` (Helm `operatorNamespace` / optional `applicationsNamespace`) when set and DNS-1123 valid; otherwise the platform default (`opendatahub` for OpenDataHub, `redhat-ods-applications` for SelfManagedRhoai).
+
+Ingress assignments are forwarded as JSON in `odh-notebook-controller-config.data.ingresses` in that same namespace. The notebook controller matches the Namespace annotation `opendatahub.io/ingress-name` to an entry and uses its explicit Gateway reference. An omitted or empty list preserves its existing default Gateway fallback. The platform orchestrator must project these structured entries; the former names-only projection is insufficient.
+
+Gateway names must be DNS-1123 subdomains of at most 253 characters; Gateway namespaces must be DNS-1123 labels of at most 63 characters. A nonempty `hostname` must be a DNS-1123 subdomain of at most 253 characters (wildcards are not accepted). There is no entry-count limit. Kubernetes enforces the ConfigMap's 1 MiB data limit; if its apply fails, the previous configuration is preserved and operand groups are not applied.
 
 ### Status
 

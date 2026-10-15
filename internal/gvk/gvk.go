@@ -17,7 +17,13 @@ limitations under the License.
 // Package gvk defines GroupVersionKind constants for resources the operator interacts with.
 package gvk
 
-import "k8s.io/apimachinery/pkg/runtime/schema"
+import (
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// Deployment is the GVK for apps Deployment resources.
+var Deployment = appsv1.SchemeGroupVersion.WithKind("Deployment")
 
 // Notebook is the GVK for Kubeflow Notebook resources.
 var Notebook = schema.GroupVersionKind{

@@ -38,6 +38,34 @@ type WorkbenchesV2Spec struct {
 	ManagementState string `json:"managementState,omitempty"`
 }
 
+// Ingress identifies a Gateway available for namespace ingress assignment.
+type Ingress struct {
+	// name is matched against the Namespace's opendatahub.io/ingress-name annotation.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+
+	// gatewayName is the name of the parent Gateway.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	GatewayName string `json:"gatewayName"`
+
+	// gatewayNamespace is the namespace of the parent Gateway.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+	GatewayNamespace string `json:"gatewayNamespace"`
+
+	// hostname is optional ingress metadata forwarded to the notebook controller.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
+	Hostname string `json:"hostname,omitempty"`
+
+	// isDefault selects this entry when the Namespace has no ingress annotation.
+	IsDefault bool `json:"isDefault,omitempty"`
+}
+
 // WorkbenchesSpec defines the desired state of Workbenches.
 type WorkbenchesSpec struct {
 	// managementState indicates whether this component should be managed by the operator.
@@ -70,6 +98,13 @@ type WorkbenchesSpec struct {
 	// Projected by the orchestrator from the platform GatewayConfig.
 	// +kubebuilder:validation:MaxLength=253
 	GatewayDomain string `json:"gatewayDomain,omitempty"`
+
+	// ingresses are Gateway assignments projected by the orchestrator.
+	// An empty list preserves the notebook controller's default Gateway fallback.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:XValidation:rule="self.filter(i, has(i.isDefault) && i.isDefault).size() <= 1",message="at most one ingress can be default"
+	Ingresses []Ingress `json:"ingresses,omitempty"`
 
 	// platform identifies the platform type (OpenDataHub, SelfManagedRhoai).
 	// Projected by the orchestrator.
