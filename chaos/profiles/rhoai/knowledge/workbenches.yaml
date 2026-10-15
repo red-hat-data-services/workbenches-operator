@@ -86,6 +86,10 @@ components:
   - name: odh-notebook-controller
     controller: Workbenches
     managedResources:
+      - apiVersion: v1
+        kind: ConfigMap
+        name: odh-notebook-controller-config
+        namespace: redhat-ods-applications
       - apiVersion: apps/v1
         kind: Deployment
         name: odh-notebook-controller-manager
