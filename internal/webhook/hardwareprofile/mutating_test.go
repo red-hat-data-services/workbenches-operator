@@ -26,6 +26,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	"gomodules.xyz/jsonpatch/v2"
+	jsonpatchv4 "gopkg.in/evanphx/json-patch.v4"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -176,6 +177,68 @@ func newKueueHWP(name, queueName string) *unstructured.Unstructured {
 	}
 }
 
+func newDRAHWP(name, templateName string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": gvk.HardwareProfile.Group + "/" + gvk.HardwareProfile.Version,
+			"kind":       gvk.HardwareProfile.Kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": testNamespace,
+			},
+			"spec": map[string]any{
+				"dra": map[string]any{
+					"resourceClaimTemplateName": templateName,
+				},
+			},
+		},
+	}
+}
+
+func newDRAHWPWithIdentifiers(name, templateName string, identifiers []any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": gvk.HardwareProfile.Group + "/" + gvk.HardwareProfile.Version,
+			"kind":       gvk.HardwareProfile.Kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": testNamespace,
+			},
+			"spec": map[string]any{
+				"identifiers": identifiers,
+				"dra": map[string]any{
+					"resourceClaimTemplateName": templateName,
+				},
+			},
+		},
+	}
+}
+
+func newResourceClaimTemplate(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": gvk.ResourceClaimTemplate.Group + "/" + gvk.ResourceClaimTemplate.Version,
+			"kind":       gvk.ResourceClaimTemplate.Kind,
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": testNamespace,
+			},
+			"spec": map[string]any{
+				"spec": map[string]any{
+					"devices": map[string]any{
+						"requests": []any{
+							map[string]any{
+								"name":            "gpu",
+								"deviceClassName": "gpu.example.com",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func cpuIdentifier(minCount, defaultCount string, maxCount ...string) map[string]any {
 	id := map[string]any{
 		"displayName":  "CPU",
@@ -283,6 +346,32 @@ func newUpdateAdmissionRequest(t *testing.T, newObj, oldObj *unstructured.Unstru
 			OldObject: runtime.RawExtension{Raw: oldBytes},
 		},
 	}
+}
+
+func applyPatchesAndUnmarshal(t *testing.T, rawObj []byte, patches []jsonpatch.JsonPatchOperation) *unstructured.Unstructured {
+	t.Helper()
+
+	patchBytes, err := json.Marshal(patches)
+	if err != nil {
+		t.Fatalf("failed to marshal patches: %v", err)
+	}
+
+	jpatch, err := jsonpatchv4.DecodePatch(patchBytes)
+	if err != nil {
+		t.Fatalf("failed to decode patch: %v", err)
+	}
+
+	result, err := jpatch.Apply(rawObj)
+	if err != nil {
+		t.Fatalf("failed to apply patch: %v", err)
+	}
+
+	obj := &unstructured.Unstructured{Object: map[string]any{}}
+	if err := json.Unmarshal(result, obj); err != nil {
+		t.Fatalf("failed to unmarshal patched object: %v", err)
+	}
+
+	return obj
 }
 
 func hasResourcePatches(patches []jsonpatch.JsonPatchOperation) bool {
@@ -1805,6 +1894,988 @@ func TestHardwareProfile_EventCreationFailureDoesNotBlockAdmission(t *testing.T)
 
 	g.Expect(resp.Allowed).Should(BeTrue(), "Admission must succeed even if event creation fails")
 	g.Expect(resp.Warnings).ShouldNot(BeEmpty(), "Warning should still be present")
+}
+
+// --- DRA Tests ---
+
+func TestHardwareProfile_DRA_AppliesResourceClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "single-gpu"
+	rct := newResourceClaimTemplate(templateName)
+	hwp := newDRAHWP(testHardwareProfile, templateName)
+
+	injector := createInjector(t, s, hwp, rct)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+	g.Expect(resp.Patches).Should(Not(BeEmpty()))
+
+	// Verify pod-level resourceClaims patch
+	foundResourceClaims := false
+	for _, patch := range resp.Patches {
+		if strings.Contains(patch.Path, "resourceClaims") && !strings.Contains(patch.Path, "containers") {
+			foundResourceClaims = true
+
+			if claims, ok := patch.Value.([]any); ok {
+				g.Expect(claims).Should(HaveLen(1))
+
+				claim, ok := claims[0].(map[string]any)
+				g.Expect(ok).Should(BeTrue())
+				g.Expect(claim["name"]).Should(Equal("hwp-dra"))
+				g.Expect(claim["resourceClaimTemplateName"]).Should(Equal(templateName))
+			}
+		}
+	}
+
+	g.Expect(foundResourceClaims).Should(BeTrue(),
+		"Should have a patch adding pod-level resourceClaims")
+}
+
+func TestHardwareProfile_DRA_SetsContainerClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "single-gpu"
+	rct := newResourceClaimTemplate(templateName)
+	hwp := newDRAHWP(testHardwareProfile, templateName)
+
+	injector := createInjector(t, s, hwp, rct)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	containers, found, err := unstructured.NestedSlice(result.Object, "spec", "template", "spec", "containers")
+	g.Expect(err).ShouldNot(HaveOccurred())
+	g.Expect(found).Should(BeTrue())
+	g.Expect(containers).ShouldNot(BeEmpty())
+
+	mainContainer, ok := containers[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+
+	resources, ok := mainContainer["resources"].(map[string]any)
+	g.Expect(ok).Should(BeTrue(), "Main container should have resources")
+
+	claims, ok := resources["claims"].([]any)
+	g.Expect(ok).Should(BeTrue(), "Main container should have resources.claims")
+
+	foundDRAClaim := false
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			if m["name"] == "hwp-dra" {
+				foundDRAClaim = true
+			}
+		}
+	}
+
+	g.Expect(foundDRAClaim).Should(BeTrue(),
+		"Should have container-level resources.claims referencing the DRA claim")
+}
+
+func TestHardwareProfile_DRA_WithIdentifiers(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "single-gpu"
+	rct := newResourceClaimTemplate(templateName)
+	hwp := newDRAHWPWithIdentifiers(testHardwareProfile, templateName, []any{
+		cpuIdentifier("2", "4"),
+		memoryIdentifier("4Gi", "8Gi"),
+	})
+
+	injector := createInjector(t, s, hwp, rct)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+	g.Expect(resp.Patches).Should(Not(BeEmpty()))
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// Verify pod-level DRA resourceClaims
+	podClaims, podClaimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(podClaimsFound).Should(BeTrue(), "Should have pod-level resourceClaims")
+	g.Expect(podClaims).Should(HaveLen(1))
+
+	// Verify container has both resource requests/limits AND DRA claims
+	containers, _, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "containers")
+	g.Expect(containers).ShouldNot(BeEmpty())
+
+	mainContainer, _ := containers[0].(map[string]any)
+	resources, _ := mainContainer["resources"].(map[string]any)
+	g.Expect(resources).ShouldNot(BeNil(), "Main container should have resources")
+
+	requests, _ := resources["requests"].(map[string]any)
+	g.Expect(requests).Should(HaveKey("cpu"), "Should have CPU request from identifiers")
+	g.Expect(requests).Should(HaveKey("memory"), "Should have memory request from identifiers")
+
+	claims, ok := resources["claims"].([]any)
+	g.Expect(ok).Should(BeTrue(), "Should have resources.claims for DRA")
+
+	foundDRAClaim := false
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			if m["name"] == "hwp-dra" {
+				foundDRAClaim = true
+			}
+		}
+	}
+
+	g.Expect(foundDRAClaim).Should(BeTrue(), "Should have DRA claim in container resources")
+}
+
+func TestHardwareProfile_DRA_DeniesWhenTemplateNotFound(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// HWP references a template that doesn't exist
+	hwp := newDRAHWP(testHardwareProfile, "nonexistent-template")
+
+	injector := createInjector(t, s, hwp)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeFalse())
+	g.Expect(resp.Result.Message).Should(ContainSubstring("ResourceClaimTemplate"))
+	g.Expect(resp.Result.Message).Should(ContainSubstring("nonexistent-template"))
+	g.Expect(resp.Result.Message).Should(ContainSubstring("not found"))
+}
+
+func TestHardwareProfile_DRA_ProfileChangeClearsClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// New profile has no DRA
+	newHWPObj := newHWP("new-profile", testNamespace, []any{
+		cpuIdentifier("2", "4"),
+	}, nil, nil)
+
+	injector := createInjector(t, s, newHWPObj)
+
+	// Old notebook had a DRA profile
+	oldNB := newNotebook(hwpAnnotations("old-dra-profile"))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook switches to non-DRA profile but still has old resourceClaims
+	newNB := newNotebook(hwpAnnotations("new-profile"))
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	// resourceClaims should be removed
+	foundResourceClaimsRemove := false
+	for _, patch := range resp.Patches {
+		if patch.Operation == "remove" && strings.Contains(patch.Path, "resourceClaims") &&
+			!strings.Contains(patch.Path, "containers") {
+			foundResourceClaimsRemove = true
+		}
+	}
+
+	g.Expect(foundResourceClaimsRemove).Should(BeTrue(),
+		"Profile change to non-DRA should remove resourceClaims")
+}
+
+func TestHardwareProfile_DRA_ProfileChangeToDifferentDRA(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// New DRA profile with different template
+	newTemplateName := "new-gpu-template"
+	newRCT := newResourceClaimTemplate(newTemplateName)
+	newHWPObj := newDRAHWP("new-dra-profile", newTemplateName)
+
+	injector := createInjector(t, s, newHWPObj, newRCT)
+
+	// Old notebook had a different DRA profile
+	oldNB := newNotebook(hwpAnnotations("old-dra-profile"))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	newNB := newNotebook(hwpAnnotations("new-dra-profile"))
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	podClaims, found, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(found).Should(BeTrue(), "Should have pod-level resourceClaims after profile change")
+	g.Expect(podClaims).Should(HaveLen(1))
+
+	claimMap, ok := podClaims[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+	g.Expect(claimMap["name"]).Should(Equal("hwp-dra"))
+	g.Expect(claimMap["resourceClaimTemplateName"]).Should(Equal(newTemplateName),
+		"resourceClaimTemplateName should reference the new profile's template")
+}
+
+func TestHardwareProfile_DRA_RemovalCleansUp(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+	oldHWP := newDRAHWP("dra-profile", templateName)
+
+	injector := createInjector(t, s, oldHWP, rct)
+
+	// Old notebook had DRA profile
+	oldNB := newNotebook(hwpAnnotationsWithNamespace("dra-profile", testNamespace))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": templateName,
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook removes the HWP annotation
+	newNB := newNotebook(map[string]string{
+		metadata.HardwareProfileNamespaceAnnotation: testNamespace,
+	})
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": templateName,
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	// resourceClaims should be removed
+	foundClaimsRemoval := false
+	for _, patch := range resp.Patches {
+		if strings.Contains(patch.Path, "resourceClaims") && !strings.Contains(patch.Path, "containers") {
+			if patch.Operation == "remove" {
+				foundClaimsRemoval = true
+			}
+		}
+	}
+
+	g.Expect(foundClaimsRemoval).Should(BeTrue(),
+		"HWP removal should clean up DRA resourceClaims")
+}
+
+func TestHardwareProfile_DRA_PreservesUserClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+	hwp := newDRAHWP(testHardwareProfile, templateName)
+
+	injector := createInjector(t, s, hwp, rct)
+
+	// Notebook has a user-managed resourceClaim plus the HWP annotation
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	_ = unstructured.SetNestedSlice(nb.Object, []any{
+		map[string]any{
+			"name":              "user-managed-claim",
+			"resourceClaimName": "my-existing-claim",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	claims, found, err := unstructured.NestedSlice(
+		result.Object, "spec", "template", "spec", "resourceClaims")
+	g.Expect(err).ShouldNot(HaveOccurred())
+	g.Expect(found).Should(BeTrue())
+	g.Expect(claims).Should(HaveLen(2),
+		"Should have both user-managed and HWP-managed claims")
+
+	claimNames := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			name, _ := m["name"].(string)
+			claimNames = append(claimNames, name)
+		}
+	}
+
+	g.Expect(claimNames).Should(ContainElement("user-managed-claim"),
+		"User's claim should be preserved")
+	g.Expect(claimNames).Should(ContainElement("hwp-dra"),
+		"HWP DRA claim should be added")
+}
+
+func TestHardwareProfile_DRA_NonStringTemplateNameDenied(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// DRA with non-string resourceClaimTemplateName
+	hwp := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": gvk.HardwareProfile.Group + "/" + gvk.HardwareProfile.Version,
+			"kind":       gvk.HardwareProfile.Kind,
+			"metadata": map[string]any{
+				"name":      testHardwareProfile,
+				"namespace": testNamespace,
+			},
+			"spec": map[string]any{
+				"dra": map[string]any{
+					"resourceClaimTemplateName": int64(12345),
+				},
+			},
+		},
+	}
+
+	injector := createInjector(t, s, hwp)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeFalse(),
+		"Should deny when resourceClaimTemplateName is not a string")
+	g.Expect(resp.Result.Message).Should(ContainSubstring("resourceClaimTemplateName"))
+}
+
+func TestHardwareProfile_DRA_InvalidTemplateNameDenied(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// Template name with uppercase letters — invalid DNS-1123 subdomain
+	hwp := newDRAHWP(testHardwareProfile, "INVALID_TEMPLATE_NAME!")
+
+	injector := createInjector(t, s, hwp)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeFalse(),
+		"Should deny when resourceClaimTemplateName is not a valid DNS-1123 subdomain")
+	g.Expect(resp.Result.Message).Should(ContainSubstring("invalid resourceClaimTemplateName"))
+}
+
+func TestHardwareProfile_DRA_NoRetroactiveCleanupWhenProfileEditedToRemoveDRA(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// Per ADR-0015: editing an already-referenced profile has no retroactive
+	// effect on already-admitted workloads. If the HWP is edited to remove DRA,
+	// existing Notebook DRA claims should remain untouched on subsequent updates.
+	hwpNoDRA := newHWP(testHardwareProfile, testNamespace, []any{
+		cpuIdentifier("2", "4"),
+	}, nil, nil)
+
+	injector := createInjector(t, s, hwpNoDRA)
+
+	// Old notebook had DRA claims from when the profile still had DRA
+	oldNB := newNotebook(hwpAnnotations(testHardwareProfile))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook keeps the same profile, still has stale claims
+	newNB := newNotebook(hwpAnnotations(testHardwareProfile))
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// DRA claims should NOT be removed — per ADR-0015, editing the HWP has no
+	// retroactive effect on already-admitted workloads.
+	claims, claimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(claimsFound).Should(BeTrue(),
+		"DRA claims should remain when HWP is edited to remove DRA (per ADR-0015)")
+	g.Expect(claims).Should(HaveLen(1))
+}
+
+func TestHardwareProfile_DRA_NoRetroactiveInjectionWhenProfileEditedToAddDRA(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// Per ADR-0015: editing an already-referenced profile has no retroactive
+	// effect on already-admitted workloads. If the HWP is edited to ADD DRA,
+	// existing Notebooks should NOT get DRA claims on subsequent updates.
+	templateName := "new-gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+	hwpWithDRA := newDRAHWPWithIdentifiers(testHardwareProfile, templateName, []any{
+		cpuIdentifier("2", "4"),
+	})
+
+	injector := createInjector(t, s, hwpWithDRA, rct)
+
+	// Old notebook already had this profile (before DRA was added to it)
+	oldNB := newNotebook(hwpAnnotations(testHardwareProfile))
+
+	// New notebook keeps the same profile, unrelated update (no DRA claims)
+	newNB := newNotebook(hwpAnnotations(testHardwareProfile))
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// DRA claims should NOT be injected — the profile was already referenced
+	// before DRA was added to it. Per ADR-0015, the edit only takes effect
+	// on the next workload created against the profile.
+	_, claimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(claimsFound).Should(BeFalse(),
+		"DRA should not be retroactively injected when HWP is edited to add DRA (per ADR-0015)")
+}
+
+func TestHardwareProfile_DRA_RemovalCleansUpWhenProfileEditedBeforeAnnotationRemoved(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// The HWP was edited to remove DRA, then the user removes the annotation.
+	// removeHWPSettings should still clean up the stale DRA claims even though
+	// the fetched HWP has no DRA field.
+	hwpNoDRA := newHWP("edited-profile", testNamespace, nil, nil, nil)
+
+	injector := createInjector(t, s, hwpNoDRA)
+
+	// Old notebook had this profile with DRA claims
+	oldNB := newNotebook(hwpAnnotationsWithNamespace("edited-profile", testNamespace))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook removes the HWP annotation but still has stale claims
+	newNB := newNotebook(map[string]string{
+		metadata.HardwareProfileNamespaceAnnotation: testNamespace,
+	})
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// Stale DRA claims should be cleaned up
+	_, claimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(claimsFound).Should(BeFalse(),
+		"DRA claims should be removed even when the fetched HWP no longer has DRA")
+}
+
+func TestHardwareProfile_DRA_KueueCoexistence(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+
+	// HWP with BOTH Kueue scheduling AND DRA
+	hwp := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": gvk.HardwareProfile.Group + "/" + gvk.HardwareProfile.Version,
+			"kind":       gvk.HardwareProfile.Kind,
+			"metadata": map[string]any{
+				"name":      testHardwareProfile,
+				"namespace": testNamespace,
+			},
+			"spec": map[string]any{
+				"scheduling": map[string]any{
+					"kueue": map[string]any{
+						"localQueueName": "gpu-queue",
+					},
+				},
+				"dra": map[string]any{
+					"resourceClaimTemplateName": templateName,
+				},
+			},
+		},
+	}
+
+	injector := createInjector(t, s, hwp, rct)
+
+	nb := newNotebook(hwpAnnotations(testHardwareProfile))
+	req := newAdmissionRequest(t, admissionv1.Create, nb, gvk.Notebook)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// Kueue label should be set
+	labels := result.GetLabels()
+	g.Expect(labels).Should(HaveKeyWithValue("kueue.x-k8s.io/queue-name", "gpu-queue"),
+		"Kueue label should be applied")
+
+	// DRA pod-level resourceClaims should also be set
+	podClaims, podClaimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(podClaimsFound).Should(BeTrue(), "Should have pod-level resourceClaims with Kueue+DRA")
+	g.Expect(podClaims).Should(HaveLen(1))
+
+	claimMap, ok := podClaims[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+	g.Expect(claimMap["name"]).Should(Equal("hwp-dra"))
+	g.Expect(claimMap["resourceClaimTemplateName"]).Should(Equal(templateName))
+
+	// Container-level resources.claims should reference the DRA claim
+	containers, _, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "containers")
+	g.Expect(containers).ShouldNot(BeEmpty())
+
+	mainContainer, _ := containers[0].(map[string]any)
+	resources, _ := mainContainer["resources"].(map[string]any)
+	g.Expect(resources).ShouldNot(BeNil())
+
+	claims, ok := resources["claims"].([]any)
+	g.Expect(ok).Should(BeTrue(), "Should have container resources.claims with Kueue+DRA")
+
+	foundDRAClaim := false
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			if m["name"] == "hwp-dra" {
+				foundDRAClaim = true
+			}
+		}
+	}
+
+	g.Expect(foundDRAClaim).Should(BeTrue(),
+		"Container should reference the DRA claim even when Kueue is active")
+
+	// Node scheduling should NOT be applied (Kueue early return)
+	_, nsFound, _ := unstructured.NestedStringMap(result.Object,
+		"spec", "template", "spec", "nodeSelector")
+	g.Expect(nsFound).Should(BeFalse(),
+		"nodeSelector should not be set when Kueue is active")
+}
+
+func TestHardwareProfile_DRA_ProfileChangePreservesUserClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	newTemplateName := "new-gpu-template"
+	newRCT := newResourceClaimTemplate(newTemplateName)
+	// New DRA profile WITH identifiers — exercises the delete(container,"resources")
+	// path to verify user-managed container claims survive the wipe.
+	newHWPObj := newDRAHWPWithIdentifiers("new-dra-profile", newTemplateName, []any{
+		cpuIdentifier("2", "4"),
+		memoryIdentifier("4Gi", "8Gi"),
+	})
+
+	injector := createInjector(t, s, newHWPObj, newRCT)
+
+	// Old notebook had a different DRA profile AND a user-managed claim
+	oldNB := newNotebook(hwpAnnotations("old-dra-profile"))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-gpu-template",
+		},
+		map[string]any{
+			"name":              "user-claim",
+			"resourceClaimName": "my-persistent-claim",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// Set user-managed container-level claim reference on the main container
+	containers, _, _ := unstructured.NestedSlice(oldNB.Object, "spec", "template", "spec", "containers")
+	mainContainer, _ := containers[0].(map[string]any)
+	mainContainer["resources"] = map[string]any{
+		"claims": []any{
+			map[string]any{"name": "hwp-dra"},
+			map[string]any{"name": "user-claim"},
+		},
+		"requests": map[string]any{"cpu": "1", "memory": "2Gi"},
+		"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
+	}
+	containers[0] = mainContainer
+	_ = unstructured.SetNestedSlice(oldNB.Object, containers, "spec", "template", "spec", "containers")
+
+	// New notebook switches to different DRA profile; still has old claims
+	newNB := newNotebook(hwpAnnotations("new-dra-profile"))
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "old-gpu-template",
+		},
+		map[string]any{
+			"name":              "user-claim",
+			"resourceClaimName": "my-persistent-claim",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+	// Copy same container resources to new notebook
+	newContainers, _, _ := unstructured.NestedSlice(newNB.Object, "spec", "template", "spec", "containers")
+	newMainContainer, _ := newContainers[0].(map[string]any)
+	newMainContainer["resources"] = map[string]any{
+		"claims": []any{
+			map[string]any{"name": "hwp-dra"},
+			map[string]any{"name": "user-claim"},
+		},
+		"requests": map[string]any{"cpu": "1", "memory": "2Gi"},
+		"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
+	}
+	newContainers[0] = newMainContainer
+	_ = unstructured.SetNestedSlice(newNB.Object, newContainers, "spec", "template", "spec", "containers")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// Verify pod-level claims
+	podClaims, found, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(found).Should(BeTrue(), "Should have pod-level resourceClaims")
+	g.Expect(podClaims).Should(HaveLen(2),
+		"Should have both the user claim and the new HWP DRA claim")
+
+	claimNames := make([]string, 0, len(podClaims))
+	for _, c := range podClaims {
+		if m, ok := c.(map[string]any); ok {
+			name, _ := m["name"].(string)
+			claimNames = append(claimNames, name)
+		}
+	}
+
+	g.Expect(claimNames).Should(ContainElement("user-claim"),
+		"User-managed claim must be preserved on profile change")
+	g.Expect(claimNames).Should(ContainElement("hwp-dra"),
+		"New HWP DRA claim should be present")
+
+	// Verify the hwp-dra claim has the NEW template name
+	for _, c := range podClaims {
+		if m, ok := c.(map[string]any); ok {
+			if m["name"] == "hwp-dra" {
+				g.Expect(m["resourceClaimTemplateName"]).Should(Equal(newTemplateName),
+					"HWP DRA claim should reference the new template")
+			}
+		}
+	}
+
+	// Verify container-level claims: both hwp-dra and user-claim should be present.
+	// The delete(container, "resources") on profile change must preserve user claims.
+	resultContainers, _, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "containers")
+	g.Expect(resultContainers).ShouldNot(BeEmpty())
+
+	resultMain, _ := resultContainers[0].(map[string]any)
+	resources, _ := resultMain["resources"].(map[string]any)
+	g.Expect(resources).ShouldNot(BeNil())
+
+	containerClaims, ok := resources["claims"].([]any)
+	g.Expect(ok).Should(BeTrue(), "Main container should have resources.claims")
+
+	containerClaimNames := make([]string, 0, len(containerClaims))
+	for _, c := range containerClaims {
+		if m, ok := c.(map[string]any); ok {
+			name, _ := m["name"].(string)
+			containerClaimNames = append(containerClaimNames, name)
+		}
+	}
+
+	g.Expect(containerClaimNames).Should(ContainElement("user-claim"),
+		"User-managed container claim must survive the profile-change resource wipe")
+	g.Expect(containerClaimNames).Should(ContainElement("hwp-dra"),
+		"HWP DRA container claim should be re-added after profile change")
+}
+
+func TestHardwareProfile_DRA_RemovalPreservesUserClaims(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+	oldHWP := newDRAHWP("dra-profile", templateName)
+
+	injector := createInjector(t, s, oldHWP, rct)
+
+	// Old notebook had DRA profile AND a user-managed claim
+	oldNB := newNotebook(hwpAnnotationsWithNamespace("dra-profile", testNamespace))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": templateName,
+		},
+		map[string]any{
+			"name":              "user-claim",
+			"resourceClaimName": "my-persistent-claim",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook removes HWP annotation but still has claims
+	newNB := newNotebook(map[string]string{
+		metadata.HardwareProfileNamespaceAnnotation: testNamespace,
+	})
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": templateName,
+		},
+		map[string]any{
+			"name":              "user-claim",
+			"resourceClaimName": "my-persistent-claim",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	podClaims, found, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(found).Should(BeTrue(), "Should still have pod-level resourceClaims (user claim)")
+	g.Expect(podClaims).Should(HaveLen(1),
+		"Should only have the user-managed claim after HWP removal")
+
+	claimMap, ok := podClaims[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+	g.Expect(claimMap["name"]).Should(Equal("user-claim"),
+		"Only the user-managed claim should remain")
+}
+
+func TestHardwareProfile_DRA_ProfileNewlyAddedToExistingNotebook(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	templateName := "gpu-template"
+	rct := newResourceClaimTemplate(templateName)
+	hwp := newDRAHWP(testHardwareProfile, templateName)
+
+	injector := createInjector(t, s, hwp, rct)
+
+	// Old notebook had NO hardware profile annotation
+	oldNB := newNotebook(map[string]string{})
+
+	// New notebook adds a DRA-backed hardware profile via update
+	newNB := newNotebook(hwpAnnotations(testHardwareProfile))
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue())
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// DRA pod-level resourceClaims should be injected even though this is
+	// an update (not a create) and detectProfileChange returns false
+	// (old profile was empty).
+	podClaims, podClaimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(podClaimsFound).Should(BeTrue(),
+		"DRA should be applied when a profile is newly added to an existing notebook")
+	g.Expect(podClaims).Should(HaveLen(1))
+
+	claimMap, ok := podClaims[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+	g.Expect(claimMap["name"]).Should(Equal("hwp-dra"))
+	g.Expect(claimMap["resourceClaimTemplateName"]).Should(Equal(templateName))
+
+	// Container-level resources.claims should also be set
+	containers, _, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "containers")
+	g.Expect(containers).ShouldNot(BeEmpty())
+
+	mainContainer, _ := containers[0].(map[string]any)
+	resources, _ := mainContainer["resources"].(map[string]any)
+	g.Expect(resources).ShouldNot(BeNil())
+
+	claims, ok := resources["claims"].([]any)
+	g.Expect(ok).Should(BeTrue(), "Container should have resources.claims for DRA")
+
+	foundDRAClaim := false
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			if m["name"] == "hwp-dra" {
+				foundDRAClaim = true
+			}
+		}
+	}
+
+	g.Expect(foundDRAClaim).Should(BeTrue(),
+		"Container should reference the DRA claim when profile is newly added")
+}
+
+func TestHardwareProfile_DRA_StaleProfileRemovalCleansDRA(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// The old HardwareProfile has been deleted from the cluster.
+	// The injector has no objects — fetchHardwareProfile will fail.
+	injector := createInjector(t, s)
+
+	// Old notebook had the (now-deleted) profile with DRA claims
+	oldNB := newNotebook(hwpAnnotationsWithNamespace("deleted-profile", testNamespace))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook removes the HWP name annotation but still has stale claims
+	newNB := newNotebook(map[string]string{
+		metadata.HardwareProfileNamespaceAnnotation: testNamespace,
+	})
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	g.Expect(resp.Allowed).Should(BeTrue(),
+		"Should allow removal even when old HWP cannot be fetched")
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// DRA claims should be cleaned up even though the old HWP couldn't be fetched.
+	// removeDRAFromNotebook uses the constant claim name and doesn't need the HWP.
+	_, claimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(claimsFound).Should(BeFalse(),
+		"DRA claims should be removed when old HWP is missing and annotation is removed")
+}
+
+func TestHardwareProfile_DRA_SameProfileUpdateSkipsRevalidation(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+	s := newScheme(t)
+
+	// HWP references a template that we deliberately do NOT add to the client.
+	// If the webhook tries to validate the RCT on a same-profile update, it
+	// will fail with NotFound and deny the request.
+	hwp := newDRAHWP(testHardwareProfile, "gpu-template")
+
+	injector := createInjector(t, s, hwp)
+
+	// Old notebook already had this profile with DRA applied
+	oldNB := newNotebook(hwpAnnotations(testHardwareProfile))
+	_ = unstructured.SetNestedSlice(oldNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	// New notebook keeps the same profile (e.g., user changed an env var)
+	newNB := newNotebook(hwpAnnotations(testHardwareProfile))
+	_ = unstructured.SetNestedSlice(newNB.Object, []any{
+		map[string]any{
+			"name":                      "hwp-dra",
+			"resourceClaimTemplateName": "gpu-template",
+		},
+	}, "spec", "template", "spec", "resourceClaims")
+
+	req := newUpdateAdmissionRequest(t, newNB, oldNB)
+	resp := injector.Handle(t.Context(), req)
+
+	// Should succeed even though the RCT is NOT in the client — the webhook
+	// must not re-validate DRA on same-profile updates.
+	g.Expect(resp.Allowed).Should(BeTrue(),
+		"Same-profile update should not re-validate the ResourceClaimTemplate")
+
+	result := applyPatchesAndUnmarshal(t, req.Object.Raw, resp.Patches)
+
+	// Existing DRA claims should be left as-is
+	claims, claimsFound, _ := unstructured.NestedSlice(result.Object,
+		"spec", "template", "spec", "resourceClaims")
+	g.Expect(claimsFound).Should(BeTrue(),
+		"Existing DRA claims should remain on same-profile update")
+	g.Expect(claims).Should(HaveLen(1))
+
+	claimMap, ok := claims[0].(map[string]any)
+	g.Expect(ok).Should(BeTrue())
+	g.Expect(claimMap["name"]).Should(Equal("hwp-dra"))
+	g.Expect(claimMap["resourceClaimTemplateName"]).Should(Equal("gpu-template"),
+		"Template name should be unchanged on same-profile update")
 }
 
 func TestParseQuantityValue(t *testing.T) {

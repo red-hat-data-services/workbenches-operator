@@ -46,6 +46,13 @@ var HardwareProfile = schema.GroupVersionKind{
 	Kind:    "HardwareProfile",
 }
 
+// ResourceClaimTemplate is the GVK for Kubernetes DRA ResourceClaimTemplate resources.
+var ResourceClaimTemplate = schema.GroupVersionKind{
+	Group:   "resource.k8s.io",
+	Version: "v1",
+	Kind:    "ResourceClaimTemplate",
+}
+
 // Namespace is the GVK for core Namespace resources.
 var Namespace = schema.GroupVersionKind{
 	Group:   "",
