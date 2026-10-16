@@ -52,17 +52,24 @@ const (
 	specField = "spec"
 
 	kueueQueueNameLabel = "kueue.x-k8s.io/queue-name"
+
+	// draClaimName is the deterministic name used for the pod-level ResourceClaim
+	// entry managed by the hardware profile webhook. Using a constant name makes
+	// it easy to identify and clean up webhook-managed claims.
+	draClaimName = "hwp-dra"
 )
 
 var (
-	notebookContainersPath   = []string{specField, "template", specField, "containers"}
-	notebookNodeSelectorPath = []string{specField, "template", specField, "nodeSelector"}
-	notebookTolerationsPath  = []string{specField, "template", specField, "tolerations"}
+	notebookContainersPath     = []string{specField, "template", specField, "containers"}
+	notebookNodeSelectorPath   = []string{specField, "template", specField, "nodeSelector"}
+	notebookTolerationsPath    = []string{specField, "template", specField, "tolerations"}
+	notebookResourceClaimsPath = []string{specField, "template", specField, "resourceClaims"}
 
 	errNoMatchingContainer = errors.New("no matching main container found")
 )
 
 //+kubebuilder:rbac:groups=infrastructure.opendatahub.io,resources=hardwareprofiles,verbs=get
+//+kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaimtemplates,verbs=get
 //+kubebuilder:rbac:groups="",resources=events,verbs=create
 //+kubebuilder:webhook:path=/workbenches-hardware-profile,mutating=true,failurePolicy=fail,timeoutSeconds=5,groups=kubeflow.org,resources=notebooks,verbs=create;update,versions=v1,name=hardwareprofile-notebook-injector.opendatahub.io,sideEffects=NoneOnDryRun,admissionReviewVersions=v1
 
@@ -144,36 +151,7 @@ func (i *Injector) performHardwareProfileInjection(
 
 	hwp, err := i.fetchHardwareProfile(ctx, profileNamespace, profileName)
 	if err != nil {
-		if k8serr.IsNotFound(err) {
-			log.V(1).Info("Hardware profile not found", "profile", profileName, "namespace", profileNamespace, "request", req.Name)
-
-			if req.Operation == admissionv1.Update && i.isStaleProfileReference(req, profileName) {
-				return admission.Allowed(
-					fmt.Sprintf("hardware profile '%s' not found in namespace '%s'; allowing update with warning",
-						profileName, profileNamespace)).
-					WithWarnings(
-						fmt.Sprintf("Referenced hardware profile '%s' in namespace '%s' no longer exists. "+
-							"Profile settings were not applied. Remove or update the annotation to clear this warning.",
-							profileName, profileNamespace))
-			}
-
-			return admission.Errored(http.StatusBadRequest,
-				fmt.Errorf("hardware profile '%s' not found in namespace '%s'", profileName, profileNamespace))
-		}
-
-		log.Error(err, "Failed to get hardware profile", "profile", profileName, "namespace", profileNamespace)
-
-		if req.Operation == admissionv1.Update && i.isStaleProfileReference(req, profileName) {
-			return admission.Allowed(
-				fmt.Sprintf("failed to fetch hardware profile '%s'; allowing update with warning",
-					profileName)).
-				WithWarnings(
-					fmt.Sprintf("Failed to fetch hardware profile '%s' from namespace '%s': %v. "+
-						"Profile settings were not applied.", profileName, profileNamespace, err))
-		}
-
-		return admission.Errored(http.StatusInternalServerError,
-			fmt.Errorf("failed to get hardware profile '%s' from namespace '%s': %w", profileName, profileNamespace, err))
+		return i.handleFetchError(ctx, req, err, profileName, profileNamespace)
 	}
 
 	if getAnnotation(obj, metadata.HardwareProfileNamespaceAnnotation) == "" {
@@ -217,13 +195,16 @@ func (i *Injector) performHardwareProfileInjection(
 		return resp
 	}
 
+	isCreate := req.Operation == admissionv1.Create
 	profileChanged := i.detectProfileChange(req, profileName, profileNamespace)
+	profileNewlyAdded := i.isProfileNewlyAdded(req)
+
 	if profileChanged {
 		log.V(1).Info("hardware profile changed, will clear existing scheduling settings",
 			"workload", obj.GetName(), "newProfile", profileName, "newNamespace", profileNamespace)
 	}
 
-	warnings, err := i.applyHardwareProfileToNotebook(ctx, obj, hwp, profileChanged)
+	warnings, err := i.applyHardwareProfileToNotebook(ctx, obj, hwp, profileChanged, isCreate || profileNewlyAdded)
 	if err != nil {
 		log.Error(err, "Failed to apply hardware profile", "profile", profileName)
 
@@ -244,6 +225,63 @@ func (i *Injector) performHardwareProfileInjection(
 	}
 
 	return resp
+}
+
+func (i *Injector) handleFetchError(
+	ctx context.Context,
+	req *admission.Request,
+	err error,
+	profileName, profileNamespace string,
+) admission.Response {
+	log := logf.FromContext(ctx)
+
+	if k8serr.IsNotFound(err) {
+		log.V(1).Info("Hardware profile not found", "profile", profileName, "namespace", profileNamespace, "request", req.Name)
+
+		if req.Operation == admissionv1.Update && i.isStaleProfileReference(req, profileName) {
+			return admission.Allowed(
+				fmt.Sprintf("hardware profile '%s' not found in namespace '%s'; allowing update with warning",
+					profileName, profileNamespace)).
+				WithWarnings(
+					fmt.Sprintf("Referenced hardware profile '%s' in namespace '%s' no longer exists. "+
+						"Profile settings were not applied. Remove or update the annotation to clear this warning.",
+						profileName, profileNamespace))
+		}
+
+		return admission.Errored(http.StatusBadRequest,
+			fmt.Errorf("hardware profile '%s' not found in namespace '%s'", profileName, profileNamespace))
+	}
+
+	log.Error(err, "Failed to get hardware profile", "profile", profileName, "namespace", profileNamespace)
+
+	if req.Operation == admissionv1.Update && i.isStaleProfileReference(req, profileName) {
+		return admission.Allowed(
+			fmt.Sprintf("failed to fetch hardware profile '%s'; allowing update with warning",
+				profileName)).
+			WithWarnings(
+				fmt.Sprintf("Failed to fetch hardware profile '%s' from namespace '%s': %v. "+
+					"Profile settings were not applied.", profileName, profileNamespace, err))
+	}
+
+	return admission.Errored(http.StatusInternalServerError,
+		fmt.Errorf("failed to get hardware profile '%s' from namespace '%s': %w", profileName, profileNamespace, err))
+}
+
+// isProfileNewlyAdded returns true when an update adds a hardware profile
+// annotation to a Notebook that previously had none. This is distinct from
+// detectProfileChange (which compares two non-empty profile names) and from
+// isCreate. Used to gate first-time DRA application on existing notebooks.
+func (i *Injector) isProfileNewlyAdded(req *admission.Request) bool {
+	if req.Operation == admissionv1.Create || req.OldObject.Raw == nil {
+		return false
+	}
+
+	oldObj := &unstructured.Unstructured{Object: map[string]any{}}
+	if err := json.Unmarshal(req.OldObject.Raw, oldObj); err != nil {
+		return false
+	}
+
+	return getAnnotation(oldObj, metadata.HardwareProfileNameAnnotation) == ""
 }
 
 func (i *Injector) detectProfileChange(req *admission.Request, newProfileName, newProfileNamespace string) bool {
@@ -444,6 +482,11 @@ func (i *Injector) handleHWPRemoval(
 		log.V(1).Info("Could not fetch old HWP for cleanup, HWP-applied settings may remain",
 			"error", err, "oldProfile", oldProfileName, "oldNamespace", oldProfileNamespace)
 
+		// DRA cleanup does not need the old HWP — the claim name is the
+		// constant draClaimName. Clean it up now; the name annotation is
+		// already gone so future updates will never re-enter handleHWPRemoval.
+		removeDRAFromNotebook(obj)
+
 		removeAnnotation(obj, metadata.HardwareProfileNamespaceAnnotation)
 
 		marshaledObj, marshalErr := json.Marshal(obj)
@@ -499,6 +542,12 @@ func (i *Injector) removeHWPSettings(obj, hwp *unstructured.Unstructured) error 
 			return fmt.Errorf("failed to remove HWP tolerations: %w", err)
 		}
 	}
+
+	// Remove webhook-managed DRA resourceClaims unconditionally. The fetched
+	// HWP may have been edited to remove DRA before the annotation was removed
+	// from the Notebook, so we cannot gate cleanup on the current HWP state.
+	// removeDRAFromNotebook is a no-op when no managed claims are present.
+	removeDRAFromNotebook(obj)
 
 	return nil
 }
@@ -578,6 +627,276 @@ func (i *Injector) fetchHardwareProfile(ctx context.Context, namespace, name str
 	return hwp, nil
 }
 
+func (i *Injector) fetchResourceClaimTemplate(ctx context.Context, namespace, name string) error {
+	rct := &unstructured.Unstructured{Object: map[string]any{}}
+	rct.SetGroupVersionKind(gvk.ResourceClaimTemplate)
+
+	return i.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, rct)
+}
+
+// applyDRAIfConfigured reads the DRA template name from the HardwareProfile
+// and applies it to the Notebook if present and valid.
+func (i *Injector) applyDRAIfConfigured(
+	ctx context.Context,
+	notebook, hwp *unstructured.Unstructured,
+) error {
+	draTemplateName, draFound, draErr := unstructured.NestedString(hwp.Object, "spec", "dra", "resourceClaimTemplateName")
+	if draErr != nil {
+		return fmt.Errorf("failed to read spec.dra.resourceClaimTemplateName: %w", draErr)
+	}
+
+	if !draFound || draTemplateName == "" {
+		// The HardwareProfile has no DRA configured. Per ADR-0015, editing an
+		// already-referenced profile has no retroactive effect on already-admitted
+		// workloads — the change only takes effect on the next workload created
+		// against the profile. So we do not clean up existing DRA claims here.
+		return nil
+	}
+
+	if errs := validation.IsDNS1123Subdomain(draTemplateName); len(errs) > 0 {
+		return fmt.Errorf("invalid resourceClaimTemplateName %q in HardwareProfile '%s': %s",
+			draTemplateName, hwp.GetName(), errs[0])
+	}
+
+	if err := i.applyDRAToNotebook(ctx, notebook, draTemplateName); err != nil {
+		return fmt.Errorf("failed to apply DRA configuration: %w", err)
+	}
+
+	return nil
+}
+
+// applyDRAToNotebook configures Dynamic Resource Allocation on the Notebook by:
+//  1. Validating the referenced ResourceClaimTemplate exists in the Notebook's namespace.
+//  2. Adding a pod-level resourceClaim entry referencing the template.
+//  3. Adding a container-level resources.claims entry on the main container.
+//
+// Existing user-managed pod-level resourceClaims are always preserved; only
+// the webhook-managed claim (identified by draClaimName) is replaced.
+func (i *Injector) applyDRAToNotebook(
+	ctx context.Context,
+	notebook *unstructured.Unstructured,
+	templateName string,
+) error {
+	log := logf.FromContext(ctx)
+
+	if err := i.fetchResourceClaimTemplate(ctx, notebook.GetNamespace(), templateName); err != nil {
+		if k8serr.IsNotFound(err) {
+			return fmt.Errorf("ResourceClaimTemplate '%s' not found in namespace '%s'",
+				templateName, notebook.GetNamespace())
+		}
+
+		return fmt.Errorf("failed to get ResourceClaimTemplate '%s' from namespace '%s': %w",
+			templateName, notebook.GetNamespace(), err)
+	}
+
+	// Build the pod-level resourceClaim entry.
+	claim := map[string]any{
+		"name":                      draClaimName,
+		"resourceClaimTemplateName": templateName,
+	}
+
+	// Always preserve existing user-managed claims; only replace the webhook-managed one.
+	var resourceClaims []any
+
+	existingClaims, _, _ := unstructured.NestedSlice(notebook.Object, notebookResourceClaimsPath...)
+	for _, existing := range existingClaims {
+		if m, ok := existing.(map[string]any); ok {
+			if name, _ := m["name"].(string); name == draClaimName {
+				continue
+			}
+		}
+
+		resourceClaims = append(resourceClaims, existing)
+	}
+
+	resourceClaims = append(resourceClaims, claim)
+
+	if err := unstructured.SetNestedSlice(notebook.Object, resourceClaims, notebookResourceClaimsPath...); err != nil {
+		return fmt.Errorf("failed to set resourceClaims: %w", err)
+	}
+
+	// Add container-level resources.claims on the main container.
+	if err := setContainerResourceClaims(notebook, draClaimName); err != nil {
+		return fmt.Errorf("failed to set container resource claims: %w", err)
+	}
+
+	log.V(1).Info("applied DRA configuration",
+		"workload", notebook.GetName(), "resourceClaimTemplate", templateName,
+		"claimName", draClaimName)
+
+	return nil
+}
+
+// removeDRAFromNotebook removes the webhook-managed DRA resourceClaim from the
+// pod-level resourceClaims and the container-level resources.claims.
+func removeDRAFromNotebook(obj *unstructured.Unstructured) {
+	removePodResourceClaim(obj, draClaimName)
+	removeContainerResourceClaims(obj, draClaimName)
+}
+
+// removePodResourceClaim removes the named claim from the pod-level
+// resourceClaims list, preserving all other entries. If the list becomes
+// empty the field is removed entirely.
+func removePodResourceClaim(obj *unstructured.Unstructured, claimName string) {
+	existingClaims, found, _ := unstructured.NestedSlice(obj.Object, notebookResourceClaimsPath...)
+	if !found || len(existingClaims) == 0 {
+		return
+	}
+
+	remaining := filterOutClaim(existingClaims, claimName)
+
+	if len(remaining) == 0 {
+		unstructured.RemoveNestedField(obj.Object, notebookResourceClaimsPath...)
+	} else {
+		_ = unstructured.SetNestedSlice(obj.Object, remaining, notebookResourceClaimsPath...)
+	}
+}
+
+// preserveUserResourceClaims extracts user-managed resources.claims entries
+// (those not managed by the webhook) from a container map. Used to save them
+// before delete(container, "resources") on a profile change.
+func preserveUserResourceClaims(container map[string]any, webhookClaimName string) []any {
+	resourcesRaw, ok := container["resources"]
+	if !ok {
+		return nil
+	}
+
+	resourcesMap, ok := resourcesRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	existingClaims, ok := resourcesMap["claims"].([]any)
+	if !ok {
+		return nil
+	}
+
+	return filterOutClaim(existingClaims, webhookClaimName)
+}
+
+// filterOutClaim returns a copy of claims with the named entry removed.
+func filterOutClaim(claims []any, claimName string) []any {
+	remaining := make([]any, 0, len(claims))
+
+	for _, claim := range claims {
+		if m, ok := claim.(map[string]any); ok {
+			if name, _ := m["name"].(string); name == claimName {
+				continue
+			}
+		}
+
+		remaining = append(remaining, claim)
+	}
+
+	return remaining
+}
+
+// setContainerResourceClaims adds a resources.claims entry to the main container
+// referencing the given pod-level claim name.
+func setContainerResourceClaims(notebook *unstructured.Unstructured, claimName string) error {
+	containers, found, err := unstructured.NestedSlice(notebook.Object, notebookContainersPath...)
+	if err != nil {
+		return err
+	}
+
+	if !found || len(containers) == 0 {
+		return nil
+	}
+
+	mainIdx := notebookMainContainerIndex(containers, notebook.GetName())
+	if mainIdx < 0 {
+		return nil
+	}
+
+	container, ok := containers[mainIdx].(map[string]any)
+	if !ok {
+		return errors.New("container is not a map[string]any")
+	}
+
+	resourcesMap, err := getOrCreateNestedMap(container, "resources")
+	if err != nil {
+		return err
+	}
+
+	claimRef := map[string]any{"name": claimName}
+
+	// Replace or append the claim in existing claims list.
+	var claims []any
+	if existingClaims, ok := resourcesMap["claims"].([]any); ok {
+		for _, c := range existingClaims {
+			if m, ok := c.(map[string]any); ok {
+				if name, _ := m["name"].(string); name == claimName {
+					continue
+				}
+			}
+
+			claims = append(claims, c)
+		}
+	}
+
+	claims = append(claims, claimRef)
+	resourcesMap["claims"] = claims
+	container["resources"] = resourcesMap
+	containers[mainIdx] = container
+
+	return unstructured.SetNestedSlice(notebook.Object, containers, notebookContainersPath...)
+}
+
+// removeContainerResourceClaims removes the named claim from the main container's
+// resources.claims list.
+func removeContainerResourceClaims(obj *unstructured.Unstructured, claimName string) {
+	containers, found, _ := unstructured.NestedSlice(obj.Object, notebookContainersPath...)
+	if !found || len(containers) == 0 {
+		return
+	}
+
+	mainIdx := notebookMainContainerIndex(containers, obj.GetName())
+	if mainIdx < 0 {
+		return
+	}
+
+	container, ok := containers[mainIdx].(map[string]any)
+	if !ok {
+		return
+	}
+
+	resourcesRaw, hasResources := container["resources"]
+	if !hasResources {
+		return
+	}
+
+	resourcesMap, ok := resourcesRaw.(map[string]any)
+	if !ok {
+		return
+	}
+
+	existingClaims, ok := resourcesMap["claims"].([]any)
+	if !ok || len(existingClaims) == 0 {
+		return
+	}
+
+	remaining := make([]any, 0, len(existingClaims))
+	for _, c := range existingClaims {
+		if m, ok := c.(map[string]any); ok {
+			if name, _ := m["name"].(string); name == claimName {
+				continue
+			}
+		}
+
+		remaining = append(remaining, c)
+	}
+
+	if len(remaining) == 0 {
+		delete(resourcesMap, "claims")
+	} else {
+		resourcesMap["claims"] = remaining
+	}
+
+	container["resources"] = resourcesMap
+	containers[mainIdx] = container
+	_ = unstructured.SetNestedSlice(obj.Object, containers, notebookContainersPath...)
+}
+
 // isStaleProfileReference checks whether the old object already referenced the same
 // hardware profile. If true, the profile was deleted after being applied — the user
 // shouldn't be blocked from editing their notebook because of a stale reference.
@@ -600,7 +919,7 @@ func (i *Injector) isStaleProfileReference(req *admission.Request, currentProfil
 func (i *Injector) applyHardwareProfileToNotebook(
 	ctx context.Context,
 	notebook, hwp *unstructured.Unstructured,
-	profileChanged bool,
+	profileChanged, isNewProfile bool,
 ) ([]string, error) {
 	log := logf.FromContext(ctx)
 
@@ -613,12 +932,29 @@ func (i *Injector) applyHardwareProfileToNotebook(
 		removeLabel(notebook, kueueQueueNameLabel)
 		unstructured.RemoveNestedField(notebook.Object, notebookNodeSelectorPath...)
 		unstructured.RemoveNestedField(notebook.Object, notebookTolerationsPath...)
+		removeDRAFromNotebook(notebook)
 	}
 
 	identifiers, idFound, _ := unstructured.NestedSlice(hwp.Object, "spec", "identifiers")
 	if idFound && len(identifiers) > 0 {
 		if err := applyResourcesToNotebookContainer(ctx, identifiers, notebook, profileChanged); err != nil {
 			return nil, fmt.Errorf("failed to apply resource requirements: %w", err)
+		}
+	}
+
+	// Apply DRA when the profile is being applied for the first time (create
+	// or profile newly added to an existing notebook) or when the selected
+	// profile changes. On same-profile updates, existing claims are left
+	// as-is: the webhook does not rewrite resourceClaimTemplateName or
+	// re-validate the template's existence, matching the ADR-0015 principle
+	// that edits to an already-referenced profile have no retroactive effect
+	// on already-admitted workloads.
+	// DRA is applied before scheduling — it is additive and works alongside
+	// both Kueue and node scheduling, so it must not be skipped by the Kueue
+	// early return.
+	if isNewProfile || profileChanged {
+		if err := i.applyDRAIfConfigured(ctx, notebook, hwp); err != nil {
+			return nil, err
 		}
 	}
 
@@ -737,7 +1073,16 @@ func applyResourcesToNotebookContainer(ctx context.Context, identifiers []any, n
 	}
 
 	if profileChanged {
+		// Clear profile-managed resources (requests/limits) but preserve
+		// user-managed resources.claims entries so container-level DRA
+		// references for non-webhook claims survive the profile change.
+		preservedClaims := preserveUserResourceClaims(container, draClaimName)
 		delete(container, "resources")
+
+		if len(preservedClaims) > 0 {
+			resourcesMap := map[string]any{"claims": preservedClaims}
+			container["resources"] = resourcesMap
+		}
 	}
 
 	if err := applyIdentifiersToContainer(container, identifiers); err != nil {
