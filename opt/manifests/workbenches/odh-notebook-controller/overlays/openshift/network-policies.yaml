@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: odh-notebook-controller-allow-ingress
+  labels:
+    app.opendatahub.io/networkpolicy: 'true'
+spec:
+  podSelector:
+    matchLabels:
+      app: odh-notebook-controller
+  policyTypes:
+  - Ingress
+  ingress:
+  # Webhook server (TCP 8443): reached by the kube-apiserver (via the
+  # Konnectivity proxy on ROKS). Port-scoped so API-server webhook calls
+  # are no longer blocked by the default-deny ingress policy.
+  - ports:
+    - protocol: TCP
+      port: 8443
+  # Metrics (TCP 8080).
+  - ports:
+    - protocol: TCP
+      port: 8080
+  # Health/readiness probes (TCP 8081).
+  - ports:
+    - protocol: TCP
+      port: 8081
