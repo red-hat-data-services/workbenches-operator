@@ -1467,6 +1467,10 @@ func TestRenderRealManifests(t *testing.T) {
 
 			t.Run(testName, func(t *testing.T) {
 				groups := manifestGroupsForPlatform(p, v2Managed)
+				namespace := platform.DefaultApplicationsNamespace(p)
+				desired := map[objectRef]struct{}{
+					{gvk: corev1.SchemeGroupVersion.WithKind("ConfigMap"), namespace: namespace, name: NotebookControllerConfigMap}: {},
+				}
 
 				workDir := t.TempDir()
 				srcRoot := filepath.Join(basePath, "workbenches")
@@ -1485,6 +1489,11 @@ func TestRenderRealManifests(t *testing.T) {
 						}
 
 						renderDir := filepath.Join(workDir, group)
+						if !strings.Contains(group, "workspacekinds/") {
+							if err := patchKustomizeNamespace(renderDir, namespace, logr.Discard()); err != nil {
+								t.Fatalf("patchKustomizeNamespace(%s) failed: %v", group, err)
+							}
+						}
 
 						objects, err := renderKustomize(renderDir, params)
 						if err != nil {
@@ -1493,6 +1502,13 @@ func TestRenderRealManifests(t *testing.T) {
 
 						if len(objects) == 0 {
 							t.Errorf("renderKustomize(%s) produced 0 objects", group)
+						}
+						for _, obj := range prepareRenderedObjects(objects) {
+							ref := objectRefFrom(obj)
+							if _, duplicate := desired[ref]; duplicate {
+								t.Fatalf("duplicate resource %s %s/%s", ref.gvk, ref.namespace, ref.name)
+							}
+							desired[ref] = struct{}{}
 						}
 
 						t.Logf("rendered %d objects", len(objects))

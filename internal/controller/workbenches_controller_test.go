@@ -18,25 +18,33 @@ package controller_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/yaml"
 
 	componentsv1alpha1 "github.com/opendatahub-io/workbenches-operator/api/v1alpha1"
 	"github.com/opendatahub-io/workbenches-operator/internal/controller"
+	"github.com/opendatahub-io/workbenches-operator/internal/gvk"
 	"github.com/opendatahub-io/workbenches-operator/internal/metadata"
 	"github.com/opendatahub-io/workbenches-operator/internal/platformconfig"
 	statusutil "github.com/opendatahub-io/workbenches-operator/internal/status"
@@ -99,7 +107,241 @@ var _ = Describe("Workbenches Controller", func() {
 		}
 	})
 
+	// Readiness fixtures must be in the desired manifests so continuous GC retains them.
+	createDesiredDeployment := func(namespace, name string) {
+		deployment := createDeployment(namespace, name)
+		data, err := yaml.Marshal(deployment)
+		Expect(err).NotTo(HaveOccurred())
+		groups := []string{"workbenches/odh-notebook-controller/overlays/odh", "workbenches/odh-notebook-controller/overlays/rhoai"}
+		if name == "workspaces-controller" {
+			groups = []string{"workbenches/workspaces-controller/overlays/gateway"}
+		}
+		for _, group := range groups {
+			dir := filepath.Join(manifestsDir, group)
+			Expect(os.WriteFile(filepath.Join(dir, "deployment.yaml"), data, 0o600)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(dir, "kustomization.yaml"),
+				[]byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [deployment.yaml]\n"), 0o600)).To(Succeed())
+		}
+	}
+
 	Context("When reconciling a managed Workbenches resource", func() {
+		It("Should update notebook controller ingress config", func() {
+			wb := createWorkbenches("Managed", "legacy-ingress-test", "OpenDataHub")
+			DeferCleanup(func() {
+				cleanupWorkbenches(wb)
+				cleanupDeployments(applicationsNamespace)
+				cleanupNamespace("legacy-ingress-test")
+			})
+			ensureNamespace(applicationsNamespace)
+			createDesiredDeployment(applicationsNamespace, testNotebookControllerDeployment)
+			config := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace},
+			}
+			seed := corev1apply.ConfigMap(config.Name, config.Namespace).WithData(map[string]string{"additionalIngressNames": `["alpha"]`})
+			Expect(k8sClient.Apply(ctx, seed, client.FieldOwner(controller.FieldOwner), client.ForceOwnership)).To(Succeed())
+			wantIngresses := "[]"
+			failConfig := false
+			deploymentApplies := 0
+			watchClient, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Client = interceptor.NewClient(watchClient, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if obj.GetName() == controller.NotebookControllerConfigMap && failConfig {
+						return errors.New("ingress config apply failed")
+					}
+					if obj.GetObjectKind().GroupVersionKind() == gvk.Deployment {
+						deploymentApplies++
+						current := &corev1.ConfigMap{}
+						Expect(c.Get(ctx, client.ObjectKeyFromObject(config), current)).To(Succeed())
+						Expect(current.Data["ingresses"]).To(MatchJSON(wantIngresses), "ingress config must precede operand apply")
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			})
+			_, err = reconcileWorkbenches(reconciler, wb)
+			Expect(err).NotTo(HaveOccurred())
+			key := client.ObjectKey{Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace}
+			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
+			Expect(config.Data["ingresses"]).To(Equal("[]"))
+			Expect(config.Data).NotTo(HaveKey("additionalIngressNames"))
+			Expect(metav1.IsControlledBy(config, wb)).To(BeTrue())
+			Expect(config.Labels).To(HaveKeyWithValue(metadata.ComponentLabelKey, metadata.LabelTrue))
+			Expect(config.Labels).To(HaveKeyWithValue(metadata.PartOfLabelKey, metadata.ComponentLabelValue))
+
+			updated := getWorkbenches(wb.Name)
+			updated.Spec.Ingresses = []componentsv1alpha1.Ingress{
+				{Name: "primary", GatewayName: "default-gateway", GatewayNamespace: "default-ingress", IsDefault: true},
+				{Name: "alpha", GatewayName: "team-gateway", GatewayNamespace: "team-ingress", Hostname: "team.example.com"},
+			}
+			wantIngresses = `[
+				{"name":"primary","gatewayName":"default-gateway","gatewayNamespace":"default-ingress","isDefault":true},
+				{"name":"alpha","gatewayName":"team-gateway","gatewayNamespace":"team-ingress","hostname":"team.example.com"}
+			]`
+			Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+			_, err = reconcileWorkbenches(reconciler, wb)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
+			Expect(config.Data["ingresses"]).To(MatchJSON(wantIngresses))
+
+			updated = getWorkbenches(wb.Name)
+			updated.Spec.Ingresses = updated.Spec.Ingresses[1:]
+			updated.Spec.Ingresses[0].GatewayName = "replacement-gateway"
+			wantIngresses = `[
+				{"name":"alpha","gatewayName":"replacement-gateway","gatewayNamespace":"team-ingress","hostname":"team.example.com"}
+			]`
+			Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+			_, err = reconcileWorkbenches(reconciler, wb)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
+			Expect(config.Data["ingresses"]).To(MatchJSON(wantIngresses))
+
+			updated = getWorkbenches(wb.Name)
+			updated.Spec.Ingresses = nil
+			wantIngresses = "[]"
+			Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+			_, err = reconcileWorkbenches(reconciler, wb)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
+			Expect(config.Data["ingresses"]).To(Equal("[]"))
+			Expect(deploymentApplies).To(Equal(4))
+
+			failConfig = true
+			_, err = reconcileWorkbenches(reconciler, wb)
+			Expect(err).To(MatchError(ContainSubstring("ingress config apply failed")))
+			Expect(deploymentApplies).To(Equal(4), "operands must not be applied when ingress config fails")
+			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
+			Expect(config.Data["ingresses"]).To(Equal("[]"))
+		})
+
+		It("Should reject ingress entries with missing or empty required fields and duplicate names", func() {
+			wb := createWorkbenches("Managed", "", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			for _, entries := range []string{
+				`[{"gatewayName":"gateway","gatewayNamespace":"ingress"}]`,
+				`[{"name":"alpha","gatewayNamespace":"ingress"}]`,
+				`[{"name":"alpha","gatewayName":"gateway"}]`,
+				`[{"name":"","gatewayName":"gateway","gatewayNamespace":"ingress"}]`,
+				`[{"name":"alpha","gatewayName":"","gatewayNamespace":"ingress"}]`,
+				`[{"name":"alpha","gatewayName":"gateway","gatewayNamespace":""}]`,
+				`[{"name":"alpha","gatewayName":"one","gatewayNamespace":"ingress"},{"name":"alpha","gatewayName":"two","gatewayNamespace":"ingress"}]`,
+			} {
+				By("rejecting " + entries)
+				patch := client.RawPatch(types.MergePatchType, []byte(`{"spec":{"ingresses":`+entries+`}}`))
+				Expect(apierrors.IsInvalid(k8sClient.Patch(ctx, wb, patch))).To(BeTrue())
+			}
+		})
+
+		It("Should enforce Gateway reference syntax and ingress string length limits", func() {
+			wb := createWorkbenches("Managed", "", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			for _, field := range []string{"gatewayName", "gatewayNamespace"} {
+				for _, value := range []string{"a", "0", "team-gateway", "team.gateway", "Gateway", "bad_name", "bad/name", "bad name", "-bad", "bad-", ".bad", "bad.", "bad..name"} {
+					entry := map[string]string{"name": "alpha", "gatewayName": "gateway", "gatewayNamespace": "ingress"}
+					entry[field] = value
+					data, err := json.Marshal(map[string]any{"spec": map[string]any{"ingresses": []map[string]string{entry}}})
+					Expect(err).NotTo(HaveOccurred())
+					err = k8sClient.Patch(ctx, wb, client.RawPatch(types.MergePatchType, data))
+					if value == "a" || value == "0" || value == "team-gateway" || (field == "gatewayName" && value == "team.gateway") {
+						Expect(err).NotTo(HaveOccurred(), field+"="+value)
+					} else {
+						Expect(apierrors.IsInvalid(err)).To(BeTrue(), field+"="+value)
+					}
+				}
+			}
+			for _, limit := range []struct {
+				field string
+				max   int
+			}{{"name", 63}, {"gatewayName", 253}, {"gatewayNamespace", 63}, {"hostname", 253}} {
+				entry := map[string]string{"name": "alpha", "gatewayName": "gateway", "gatewayNamespace": "ingress"}
+				for _, length := range []int{limit.max, limit.max + 1} {
+					entry[limit.field] = strings.Repeat("a", length)
+					data, err := json.Marshal(map[string]any{"spec": map[string]any{"ingresses": []map[string]string{entry}}})
+					Expect(err).NotTo(HaveOccurred())
+					err = k8sClient.Patch(ctx, wb, client.RawPatch(types.MergePatchType, data))
+					if length == limit.max {
+						Expect(err).NotTo(HaveOccurred(), limit.field)
+					} else {
+						Expect(apierrors.IsInvalid(err)).To(BeTrue(), limit.field)
+					}
+				}
+			}
+		})
+
+		It("Should validate optional hostname syntax", func() {
+			wb := createWorkbenches("Managed", "", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			for _, hostname := range []string{
+				"", "a", "0", "team-notebooks.example.com", "Bad_Name", "UPPER.example.com", "*.example.com",
+				"bad/name", "bad name", "-bad", "bad-", ".bad", "bad.", "bad..name",
+			} {
+				entry := map[string]string{"name": "Opaque_Name", "gatewayName": "gateway", "gatewayNamespace": "ingress", "hostname": hostname}
+				data, err := json.Marshal(map[string]any{"spec": map[string]any{"ingresses": []map[string]string{entry}}})
+				Expect(err).NotTo(HaveOccurred())
+				err = k8sClient.Patch(ctx, wb, client.RawPatch(types.MergePatchType, data))
+				if hostname == "" || hostname == "a" || hostname == "0" || hostname == "team-notebooks.example.com" {
+					Expect(err).NotTo(HaveOccurred(), hostname)
+				} else {
+					Expect(apierrors.IsInvalid(err)).To(BeTrue(), hostname)
+				}
+			}
+		})
+
+		It("Should allow at most one default ingress without limiting the number of entries", func() {
+			wb := createWorkbenches("Managed", "", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			entries := make([]componentsv1alpha1.Ingress, 300)
+			for i := range entries {
+				entries[i] = componentsv1alpha1.Ingress{Name: fmt.Sprintf("ingress-%d", i), GatewayName: "gateway", GatewayNamespace: "ingress"}
+			}
+			for _, defaults := range []int{0, 1, 2} {
+				updated := getWorkbenches(wb.Name)
+				updated.Spec.Ingresses = entries
+				for i := range defaults {
+					updated.Spec.Ingresses[i].IsDefault = true
+				}
+				err := k8sClient.Update(ctx, updated)
+				if defaults < 2 {
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(apierrors.IsInvalid(err)).To(BeTrue())
+				}
+			}
+		})
+
+		It("Should reject duplicate resource identities before applying the conflicting group", func() {
+			wb := createWorkbenches("Managed", "", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			watchClient, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+			Expect(err).NotTo(HaveOccurred())
+			var applied []string
+			reconciler.Client = interceptor.NewClient(watchClient, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					applied = append(applied, obj.GetName())
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			})
+			for _, name := range []string{controller.NotebookControllerConfigMap, "duplicate-config"} {
+				applied = nil
+				for _, group := range []string{"workbenches/kf-notebook-controller/overlays/openshift", "workbenches/odh-notebook-controller/overlays/odh"} {
+					dir := filepath.Join(manifestsDir, group)
+					resource := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: " + name + "\n"
+					Expect(os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(resource), 0o600)).To(Succeed())
+					Expect(os.WriteFile(filepath.Join(dir, "kustomization.yaml"),
+						[]byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [config.yaml]\n"), 0o600)).To(Succeed())
+				}
+				_, err = reconcileWorkbenches(reconciler, wb)
+				Expect(err).To(MatchError(And(ContainSubstring("duplicate resource"), ContainSubstring(applicationsNamespace+"/"+name))))
+				wantApplied := []string{controller.NotebookControllerConfigMap}
+				if name != controller.NotebookControllerConfigMap {
+					wantApplied = append(wantApplied, name)
+				}
+				Expect(applied).To(Equal(wantApplied))
+				config := &corev1.ConfigMap{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace}, config)).To(Succeed())
+				Expect(config.Data["ingresses"]).To(Equal("[]"))
+			}
+		})
+
 		It("Should create the applications namespace and set status conditions", func() {
 			legacyNS := "legacy-notebooks-ns"
 
@@ -243,7 +485,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should set phase=Upgrading after a spec change when previously ready", func() {
 			nsName := "test-ns-upgrading"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
 
@@ -276,7 +518,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should set phase=Degraded when deployments regress after being ready", func() {
 			nsName := "test-ns-degraded"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
 
@@ -308,7 +550,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should recover to Ready when deployments become available after Degraded", func() {
 			nsName := "test-ns-degraded-recovery"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
 
@@ -344,7 +586,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should treat deployment scaled to zero as unavailable", func() {
 			nsName := "test-ns-scaled-zero"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
 
@@ -375,7 +617,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should set Ready=True when deployments are available in standalone mode", func() {
 			nsName := "test-ns-ready"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
 
@@ -406,7 +648,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should update platform version on Standalone distribution after version change", func() {
 			nsName := "test-ns-standalone-version-update"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 
 			// Create the platform ConfigMap with an initial platformVersion but no
 			// distribution fields — this simulates Standalone mode with a version stamp.
@@ -451,7 +693,7 @@ var _ = Describe("Workbenches Controller", func() {
 			fallbackNS := "opendatahub"
 			ensureNamespace(fallbackNS)
 			cleanupDeployments(fallbackNS)
-			createDeployment(fallbackNS, "odh-notebook-controller")
+			createDesiredDeployment(fallbackNS, "odh-notebook-controller")
 
 			standaloneReconciler := &controller.WorkbenchesReconciler{
 				Client:            k8sClient,
@@ -512,7 +754,7 @@ var _ = Describe("Workbenches Controller", func() {
 			fallbackNS := "redhat-ods-applications"
 			ensureNamespace(fallbackNS)
 			cleanupDeployments(fallbackNS)
-			createDeployment(fallbackNS, "odh-notebook-controller")
+			createDesiredDeployment(fallbackNS, "odh-notebook-controller")
 
 			standaloneReconciler := &controller.WorkbenchesReconciler{
 				Client:            k8sClient,
@@ -539,7 +781,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should remain not Ready when platform version config is missing on managed distribution", func() {
 			nsName := "test-ns-no-platform-version"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 			createPlatformConfig(applicationsNamespace, platformconfig.DistributionNameSelfManagedRHOAI, "1.0.0", "")
 
 			wb := createWorkbenches("Managed", nsName, "SelfManagedRhoai")
@@ -566,7 +808,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should set Ready=True when deployments, distribution, and handshake are complete", func() {
 			nsName := "test-ns-managed-ready"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 			createPlatformConfig(applicationsNamespace, "OpenDataHub", "2.0.0", testPlatformVersion)
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
@@ -594,7 +836,7 @@ var _ = Describe("Workbenches Controller", func() {
 		It("Should keep status.distribution until upgrade completes", func() {
 			nsName := "test-ns-dist-upgrade"
 			ensureNamespace(applicationsNamespace)
-			createDeployment(applicationsNamespace, "odh-notebook-controller")
+			createDesiredDeployment(applicationsNamespace, "odh-notebook-controller")
 			createPlatformConfig(applicationsNamespace, "OpenDataHub", "1.0.0", testPlatformVersion)
 
 			wb := createWorkbenches("Managed", nsName, "OpenDataHub")
@@ -807,6 +1049,10 @@ var _ = Describe("Workbenches Controller", func() {
 				metadata.PartOfLabelKey:    metadata.ComponentLabelValue,
 			})).To(Succeed())
 			Expect(deploys.Items).To(BeEmpty())
+			config := &corev1.ConfigMap{}
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{
+				Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace,
+			}, config))).To(BeTrue())
 
 			// Verify status is set correctly
 			final := getWorkbenches(wb.Name)
@@ -1147,7 +1393,7 @@ var _ = Describe("Workbenches Controller", func() {
 				cleanupNamespace("test-ns-v2-available")
 			})
 
-			createDeployment(applicationsNamespace, "workspaces-controller")
+			createDesiredDeployment(applicationsNamespace, "workspaces-controller")
 
 			updated := getWorkbenches(wb.Name)
 			updated.Spec.WorkbenchesV2 = &componentsv1alpha1.WorkbenchesV2Spec{ManagementState: "Managed"}
@@ -1238,7 +1484,7 @@ func createNamespace(name string) {
 	ExpectWithOffset(1, k8sClient.Create(ctx, ns)).To(Succeed())
 }
 
-func createDeployment(namespace, name string) {
+func createDeployment(namespace, name string) *appsv1.Deployment {
 	replicas := int32(1)
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1251,12 +1497,21 @@ func createDeployment(namespace, name string) {
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			// Match operand labels at creation: Deployment selectors are immutable.
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": name},
+				MatchLabels: map[string]string{
+					"app":                      name,
+					metadata.ComponentLabelKey: metadata.LabelTrue,
+					metadata.PartOfLabelKey:    metadata.ComponentLabelValue,
+				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app": name},
+					Labels: map[string]string{
+						"app":                      name,
+						metadata.ComponentLabelKey: metadata.LabelTrue,
+						metadata.PartOfLabelKey:    metadata.ComponentLabelValue,
+					},
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
@@ -1267,6 +1522,8 @@ func createDeployment(namespace, name string) {
 		},
 	}
 
+	deploy.SetGroupVersionKind(gvk.Deployment)
+	desired := deploy.DeepCopy()
 	err := k8sClient.Create(ctx, deploy)
 	if client.IgnoreAlreadyExists(err) != nil {
 		ExpectWithOffset(1, err).NotTo(HaveOccurred())
@@ -1280,6 +1537,7 @@ func createDeployment(namespace, name string) {
 	deploy.Status.Replicas = 1
 	deploy.Status.AvailableReplicas = 1
 	ExpectWithOffset(1, k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+	return desired
 }
 
 func updateDeploymentReplicas(namespace string, specReplicas, readyReplicas int32) {

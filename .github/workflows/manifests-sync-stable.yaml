@@ -12,6 +12,11 @@
 # empty and GitHub still evaluates strategy.matrix for always() jobs.
 # Direct push requires contents:write (GITHUB_TOKEN or MANIFEST_SYNC_PAT) and
 # branch protection that allows GitHub Actions to push.
+#
+# The workflow concurrency group must not match a job group. GitHub cancels a
+# job that reuses the workflow group (the run already holds the lock the job
+# needs). Job groups below stay manifests-sync-<branch> and
+# manifests-sync-bump-<branch> so per-branch syncs still queue across runs.
 name: Sync upstream manifests (stable/v1.x)
 
 on:
@@ -22,7 +27,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: manifests-sync-${{ github.event_name == 'schedule' && 'stable' || github.ref_name }}
+  group: manifests-sync-workflow-${{ github.event_name == 'schedule' && 'stable' || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
