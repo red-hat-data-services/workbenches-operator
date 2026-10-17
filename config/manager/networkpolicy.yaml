@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: controller-manager-allow-ingress
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: workbenches-operator
+spec:
+  podSelector:
+    matchLabels:
+      control-plane: controller-manager
+  policyTypes:
+  - Ingress
+  ingress:
+  # Metrics (TCP 8443): restrict to cluster-monitoring namespaces.
+  - ports:
+    - port: 8443
+      protocol: TCP
+    from:
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: monitoring
+  # Health/readiness probes (TCP 8081): port-scoped, no peer restriction.
+  - ports:
+    - port: 8081
+      protocol: TCP
+  # Webhook server (TCP 9443): port-scoped, no peer restriction.
+  - ports:
+    - port: 9443
+      protocol: TCP
