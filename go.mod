@@ -1,6 +1,6 @@
 module github.com/opendatahub-io/workbenches-operator
 
-go 1.26.7
+go 1.27
 
 require (
 	github.com/go-logr/logr v1.4.4
