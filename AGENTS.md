@@ -63,6 +63,7 @@ make run                # Run controller locally
 make test               # Unit + integration tests (fmt/vet + envtest, K8s 1.32.0)
 make unit-test          # Unit/integration tests without fmt/vet
 make test-e2e           # End-to-end tests (requires a running cluster)
+make test-upgrade       # Operator upgrade smoke (Kind by default; see tests/upgrade/README.md)
 make test-coverage      # HTML coverage report
 make lint               # golangci-lint
 make manifests          # Regenerate CRD, RBAC, webhook YAML from Go markers
@@ -74,7 +75,7 @@ make chart-sync         # Sync generated CRD + ClusterRole into Helm chart
 make helm-deploy        # Deploy via Helm
 ```
 
-There are no `test-upgrade`, `test-handler`, or `bundle` Makefile targets.
+There are no `test-handler` or `bundle` Makefile targets. `make test-upgrade` runs the live operator upgrade smoke. There is no `make test-chaos` target.
 
 ## Code Conventions
 
@@ -91,6 +92,7 @@ There are no `test-upgrade`, `test-handler`, or `bundle` Makefile targets.
 - Unit/integration tests use Ginkgo/Gomega with `envtest`.
 - Test files live alongside source in the same package (`internal/**/*_test.go`).
 - E2e tests live in `tests/e2e/` and run against a real cluster (Kind in CI).
+- `make test-upgrade` (`tests/upgrade/`) installs a published baseline operator, seeds Notebooks, rolls the current checkout, and checks pod and webhook invariants on Kind or an existing OpenShift cluster.
 - `TestRenderRealManifests` in `manifests_test.go` needs `opt/manifests` populated — run `make manifests-fetch` if missing.
 
 ### Labels and Annotations
@@ -152,6 +154,7 @@ GitHub Actions in `.github/workflows/`:
 - `lint.yml` — pre-commit, golangci-lint, go vet, go mod verify, kube-linter, helm-lint, chart sync/inventory verify, **verify-manifests** and **verify-generate** (ensure generated code is committed)
 - `renovate-config.yml` — `renovate-config-validator --strict` on PRs that touch `renovate.json` (or this workflow)
 - `e2e.yml` — end-to-end tests on Kind cluster (PRs touching code/Dockerfile)
+- `upgrade.yml` — operator upgrade smoke on Kind (baseline chart and published image, then the current checkout)
 - `govulncheck.yaml` — Go vulnerability scan on push to `main` (also `workflow_dispatch`)
 - `disconnected-readiness.yaml` — airgapped/disconnected readiness check on PRs
 - `operator-chaos-validation.yaml` — operator-chaos shift-left validation (knowledge, CRD diff, upgrade dry-run) on PRs touching `chaos/`, `api/`, `internal/controller/`, or `config/crd/`
@@ -189,4 +192,4 @@ Konflux builds: `.tekton/` PipelineRuns for push and pull request.
 - Tests that use real manifests (`TestRenderRealManifests`) fail without `opt/manifests` present.
 - Creating a `Workbenches` CR named anything other than `default-workbenches` is rejected by CEL.
 - The `config/manager/kustomization.yaml` image reference may contain local overrides — check before committing.
-- Do not invent e2e/upgrade/contrib paths or Makefile targets that are not in this tree (including `make test-chaos`); see [DEPENDENCIES.md](DEPENDENCIES.md) for upgrade workflows.
+- Do not invent Makefile targets that are not in this tree (including `make test-chaos`). `make test-upgrade` is the live operator upgrade smoke; see [DEPENDENCIES.md](DEPENDENCIES.md) for dependency upgrade workflows.

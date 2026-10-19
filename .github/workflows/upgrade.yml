@@ -1,0 +1,102 @@
+name: Upgrade Tests
+
+on:
+  push:
+    branches: [main, stable, v1.x]
+    paths:
+      - "cmd/**"
+      - "api/**"
+      - "internal/**"
+      - "Dockerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "charts/**"
+      - "opt/manifests/**"
+      - "tests/e2e/kind/**"
+      - "tests/kind/**"
+      - "tests/upgrade/**"
+      - ".github/workflows/upgrade.yml"
+  pull_request:
+    branches: [main, stable, v1.x]
+    paths:
+      - "cmd/**"
+      - "api/**"
+      - "internal/**"
+      - "Dockerfile"
+      - "Makefile"
+      - "go.mod"
+      - "go.sum"
+      - "config/**"
+      - "charts/**"
+      - "opt/manifests/**"
+      - "tests/e2e/kind/**"
+      - "tests/kind/**"
+      - "tests/upgrade/**"
+      - ".github/workflows/upgrade.yml"
+  workflow_dispatch:
+    inputs:
+      baseline_image:
+        description: Baseline image (quay.io/opendatahub/odh-workbenches-operator tag or digest)
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  upgrade:
+    name: Upgrade smoke
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout baseline chart
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+          persist-credentials: false
+
+      - name: Checkout previous commit as the baseline chart
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.before }}
+          path: baseline
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Raise inotify limits
+        run: sudo sysctl -w fs.inotify.max_user_instances=1024
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: workbenches-upgrade
+          node_image: kindest/node:v1.32.0
+
+      - name: Run upgrade test
+        env:
+          BASELINE_REF: ${{ github.base_ref || github.ref_name }}
+          INPUT_BASELINE_IMAGE: ${{ github.event.inputs.baseline_image }}
+          KIND_CLUSTER_NAME: workbenches-upgrade
+        run: bash tests/upgrade/run.sh --mode kind
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upgrade-diagnostics
+          path: tests/upgrade/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
