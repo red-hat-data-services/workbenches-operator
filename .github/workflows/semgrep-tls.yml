@@ -10,9 +10,9 @@ jobs:
   semgrep-tls:
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep@sha256:525beaba156b9bd3f9847d6ec0eb8f308e11f407e0c0b2da641e7c8dd99c97d6 # 1.168.0
+      image: semgrep/semgrep@sha256:dffc9caeecc924370d30f9187b6edf10949600d3ef5f69ef5c359074d8fc7d2d # 1.168.0
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Fetch argus-observe-rules
         run: |
