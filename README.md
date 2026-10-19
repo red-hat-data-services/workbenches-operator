@@ -228,10 +228,11 @@ make lint        # golangci-lint (see .golangci.yml)
 make test        # fmt, vet, envtest, unit tests
 make unit-test   # tests only (used in CI)
 make test-e2e    # end-to-end tests (requires a running cluster)
+make test-upgrade # operator upgrade smoke (Kind by default)
 make test-coverage  # HTML coverage report
 ```
 
-Tests use [envtest](https://book.kubebuilder.io/reference/envtest.html) with Kubernetes **1.32.0** assets. CI runs `TestRenderRealManifests` against the committed `opt/manifests/` tree. E2e tests (`tests/e2e/`) use Ginkgo and run against a real cluster (Kind in CI via `e2e.yml`).
+Tests use [envtest](https://book.kubebuilder.io/reference/envtest.html) with Kubernetes **1.32.0** assets. CI runs `TestRenderRealManifests` against the committed `opt/manifests/` tree. E2e tests (`tests/e2e/`) use Ginkgo and run against a real cluster (Kind in CI via `e2e.yml`). The upgrade smoke (`tests/upgrade/`, `make test-upgrade`) installs a published baseline image and rolls the current checkout on Kind or an existing OpenShift cluster. See [`tests/upgrade/README.md`](tests/upgrade/README.md).
 
 ### Build the manager binary
 
@@ -368,6 +369,7 @@ Most workflows run on pushes and PRs to `main`, `stable`, and `v1.x`. Manifest s
 | [`lint.yml`](.github/workflows/lint.yml) | pre-commit, golangci-lint, go vet, go mod verify, kube-linter, Helm lint, chart sync checks, verify-manifests, verify-generate |
 | [`renovate-config.yml`](.github/workflows/renovate-config.yml) | Validate `renovate.json` (`renovate-config-validator --strict`); path-filtered |
 | [`e2e.yml`](.github/workflows/e2e.yml) | End-to-end tests on Kind cluster |
+| [`upgrade.yml`](.github/workflows/upgrade.yml) | Operator upgrade smoke on Kind (baseline chart and published image, then the current checkout) |
 | [`govulncheck.yaml`](.github/workflows/govulncheck.yaml) | Go vulnerability scan on push to `main` (also `workflow_dispatch`) |
 | [`disconnected-readiness.yaml`](.github/workflows/disconnected-readiness.yaml) | Airgapped/disconnected readiness check on PRs |
 | [`operator-chaos-validation.yaml`](.github/workflows/operator-chaos-validation.yaml) | operator-chaos shift-left validation (knowledge, CRD diff, upgrade dry-run) on PRs touching `chaos/`, `api/`, `internal/controller/`, or `config/crd/` |
@@ -437,6 +439,8 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 ├── semgrep.yaml               # Semgrep TLS compliance rules
 ├── get_all_manifests.sh       # Upstream manifest fetch script
 ├── tests/e2e/                 # End-to-end Ginkgo tests (Kind in CI)
+├── tests/kind/                # Kind prerequisite bootstrap shared by e2e and upgrade
+├── tests/upgrade/             # Operator upgrade smoke (Kind or existing OpenShift)
 ├── DEPENDENCIES.md            # Go, dependency, and tool upgrade guide
 ├── Dockerfile                 # Hermetic container image build
 └── Makefile                   # Build, test, Helm, and deploy targets
@@ -453,6 +457,7 @@ Run `make help` for the full list. Common targets:
 | `lint` / `lint-fix` | Run golangci-lint |
 | `test` / `unit-test` | Run Go tests |
 | `test-e2e` | End-to-end tests (requires running cluster) |
+| `test-upgrade` | Operator upgrade smoke (Kind by default; see `tests/upgrade/README.md`) |
 | `test-coverage` | HTML coverage report |
 | `build` | Compile `bin/manager` |
 | `run` | Run controller locally |

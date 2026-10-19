@@ -14,6 +14,7 @@ on:
       - "config/**"
       - "charts/**"
       - "tests/e2e/**"
+      - "tests/kind/**"
       - ".github/workflows/e2e.yml"
   pull_request:
     branches: [main, stable, v1.x]
@@ -28,6 +29,7 @@ on:
       - "config/**"
       - "charts/**"
       - "tests/e2e/**"
+      - "tests/kind/**"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
 
@@ -53,65 +55,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Raise inotify limits
+        run: sudo sysctl -w fs.inotify.max_user_instances=1024
+
       - name: Create Kind cluster
         uses: helm/kind-action@v1
         with:
           cluster_name: workbenches-e2e
           node_image: kindest/node:v1.32.0
 
-      - name: Install cert-manager
-        run: |
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.0/cert-manager.yaml
-          kubectl wait --for=condition=Available --timeout=120s \
-            deployment/cert-manager-webhook -n cert-manager
-
-      # Adapted from https://github.com/jiridanek/rhoai-in-kind/tree/main/components/05-ca-operator
-      - name: Install OpenShift service-ca-operator (Kind lacks serving-cert-signer)
-        run: |
-          kubectl label node --all node-role.kubernetes.io/master="" --overwrite
-          kubectl create namespace openshift-config-managed
-          kubectl apply -f https://raw.githubusercontent.com/openshift/api/72066cc9718bcab23b025ead4925db0b823adaf0/operator/v1/zz_generated.crd-manifests/0000_50_service-ca_02_servicecas.crd.yaml
-          kubectl apply -f https://raw.githubusercontent.com/openshift/api/72066cc9718bcab23b025ead4925db0b823adaf0/config/v1/zz_generated.crd-manifests/0000_00_cluster-version-operator_01_clusteroperators.crd.yaml
-          kubectl apply -f https://raw.githubusercontent.com/openshift/api/72066cc9718bcab23b025ead4925db0b823adaf0/payload-manifests/crds/0000_10_config-operator_01_infrastructures-Default.crd.yaml
-          kubectl apply -f https://raw.githubusercontent.com/openshift/api/72066cc9718bcab23b025ead4925db0b823adaf0/payload-command/empty-resources/0000_05_config-operator_02_infrastructure.cr.yaml
-          kubectl apply -f tests/e2e/kind/service-ca-operator.yaml
-          kubectl wait --for=condition=Available --timeout=120s \
-            deployment/service-ca-operator -n openshift-service-ca-operator
-          echo "Waiting for service-ca child deployment to appear..."
-          timeout 120s bash -c \
-            'until kubectl get deployment/service-ca -n openshift-service-ca 2>/dev/null; do sleep 2; done'
-          kubectl scale deployment/service-ca-operator -n openshift-service-ca-operator --replicas=0
-          kubectl wait --for=jsonpath='{.spec.replicas}'=0 --timeout=60s \
-            deployment/service-ca-operator -n openshift-service-ca-operator
-          kubectl patch deployment/service-ca -n openshift-service-ca \
-            -p '{"spec":{"template":{"spec":{"securityContext":{"runAsUser":1001}}}}}'
-          kubectl wait --for=condition=Available --timeout=120s \
-            deployment/service-ca -n openshift-service-ca
-
-      - name: Install Prometheus Operator ServiceMonitor CRD (Kind lacks Prometheus Operator)
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.80.1/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
-          kubectl wait --for=condition=Established --timeout=60s \
-            crd/servicemonitors.monitoring.coreos.com
-
       - name: Fetch upstream manifests
         env:
           ODH_PLATFORM_TYPE: OpenDataHub
         run: make manifests-fetch
 
+      - name: Install Kind prerequisites
+        run: bash tests/kind/bootstrap.sh
+
       - name: Build operator image
         run: |
           make image-build IMG=workbenches-operator:e2e CONTAINER_ENGINE=docker
           kind load docker-image workbenches-operator:e2e --name workbenches-e2e
-
-      - name: Install Notebook CRD
-        run: kubectl apply -f opt/manifests/workbenches/kf-notebook-controller/crd/bases/kubeflow.org_notebooks.yaml
-
-      - name: Install OpenShift ImageStream CRD (Kind lacks OpenShift APIs)
-        run: kubectl apply -f opt/manifests/workbenches/odh-notebook-controller/crd/external/image.openshift.io_imagestream.yaml
-
-      - name: Install HardwareProfile CRD
-        run: kubectl apply -f tests/e2e/kind/infrastructure.opendatahub.io_hardwareprofiles.yaml
 
       # --- kustomize deploy path ---
 
