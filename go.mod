@@ -1,6 +1,6 @@
 module github.com/opendatahub-io/workbenches-operator
 
-go 1.26.7
+go 1.27
 
 require (
 	github.com/go-logr/logr v1.4.4
@@ -113,5 +113,5 @@ require (
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.37.0 // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
-	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
+	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 )
