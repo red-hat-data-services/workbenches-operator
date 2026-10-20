@@ -3,7 +3,12 @@
   "description": [
     "MintMaker overlay for workbenches-operator. Global Konflux config is inherited; do not copy it.",
     "https://konflux-ci.dev/docs/mintmaker/user/",
-    "https://github.com/konflux-ci/mintmaker/blob/main/config/renovate/renovate.json"
+    "https://github.com/konflux-ci/mintmaker/blob/main/config/renovate/renovate.json",
+    "tls-lint.yml and semgrep-tls.yml are copied from opendatahub-io/security-config by security-config-sync. Local version bumps are overwritten on the next sync, so update the template there instead. Same exclusion as opendatahub-io/kubeflow .github/dependabot.yml."
+  ],
+  "ignorePaths": [
+    ".github/workflows/tls-lint.yml",
+    ".github/workflows/semgrep-tls.yml"
   ],
   "enabledManagers": [
     "gomod",

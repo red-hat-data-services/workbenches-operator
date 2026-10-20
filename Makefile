@@ -80,6 +80,10 @@ unit-test: manifests generate envtest ## Run unit tests (no fmt/vet check).
 test-e2e: ## Run end-to-end tests against the cluster specified in ~/.kube/config.
 	go test ./tests/e2e/ -v -count=1 -timeout 30m $(if $(GINKGO_LABEL_FILTER),--ginkgo.label-filter="$(GINKGO_LABEL_FILTER)",)
 
+.PHONY: test-upgrade
+test-upgrade: ## Run the operator upgrade smoke (Kind by default; see tests/upgrade/README.md).
+	bash tests/upgrade/run.sh
+
 .PHONY: test-coverage
 test-coverage: test ## Generate HTML coverage report.
 	go tool cover -html=cover.out -o coverage.html

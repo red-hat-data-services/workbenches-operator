@@ -68,6 +68,7 @@ var imageParamMap = map[string]string{
 	"odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-n":            "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_TENSORFLOW_ROCM_PY312_IMAGE",
 	"odh-workbench-jupyter-trustyai-cpu-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_TRUSTYAI_CPU_PY312_IMAGE",
 	"odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n": "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_PYTORCH_LLMCOMPRESSOR_CUDA_PY312_IMAGE",
+	"odh-workbench-jupyter-universal-cpu-py312-c9s-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_UNIVERSAL_CPU_PY312_C9S_IMAGE",
 
 	// Pipeline runtimes (latest / -n tags)
 	"odh-pipeline-runtime-baseline-cpu-py312-c9s-n":                "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_BASELINE_CPU_PY312_C9S_IMAGE",
