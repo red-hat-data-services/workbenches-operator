@@ -16,7 +16,7 @@
 declare -A ODH_COMPONENT_MANIFESTS=(
     ["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-16@bda4ebbcf09d2a3961b5bf900250a5083f73058c:components/notebook-controller/config"
     ["workbenches/odh-notebook-controller"]="opendatahub-io:kubeflow:v1.10.0-16@bda4ebbcf09d2a3961b5bf900250a5083f73058c:components/odh-notebook-controller/config"
-    ["workbenches/notebooks"]="opendatahub-io:notebooks:v1.49.0@7b87e8f1c76ea299aa66a3e72a42a5c108666b1e:manifests"
+    ["workbenches/notebooks"]="opendatahub-io:notebooks:main@0f655089dff5f1565d42c0455da1d35a6ba9a737:manifests"
     ["workbenches/workspaces-controller"]="opendatahub-io:workbenches:v2.0.1@baf4bba731f6f3385adcbc8d7bdba2681bba1bb9:workspaces/controller/manifests/kustomize"
 )
 
@@ -24,6 +24,6 @@ declare -A ODH_COMPONENT_MANIFESTS=(
 declare -A RHOAI_COMPONENT_MANIFESTS=(
     ["workbenches/kf-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6@91d8c6b81d1df2acefb678d8a0a6363bf395dc1a:components/notebook-controller/config"
     ["workbenches/odh-notebook-controller"]="red-hat-data-services:kubeflow:rhoai-3.6@91d8c6b81d1df2acefb678d8a0a6363bf395dc1a:components/odh-notebook-controller/config"
-    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6@6eb1c244af2d29e056bd675cfe3d1c1bc2d60e17:manifests"
+    ["workbenches/notebooks"]="red-hat-data-services:notebooks:rhoai-3.6@da3ad1323984186856750195f465f2403d17068e:manifests"
     ["workbenches/workspaces-controller"]="red-hat-data-services:workbenches:rhoai-3.6@33eadd06b1fbc63f3f95bfadbce83d5ed281eed9:workspaces/controller/manifests/kustomize"
 )

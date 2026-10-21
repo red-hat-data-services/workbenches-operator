@@ -55,6 +55,8 @@ var imageParamMap = map[string]string{
 	// CodeServer workbench (latest / -n tag)
 	"odh-workbench-codeserver-datascience-cpu-py312-ubi9-n": "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_DATASCIENCE_CPU_PY312_IMAGE",
 	"odh-workbench-codeserver-baseline-cpu-py312-c9s-n":     "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_BASELINE_CPU_PY312_C9S_IMAGE",
+	"odh-workbench-codeserver-minimal-cpu-py312-n":          "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_MINIMAL_CPU_PY312_IMAGE",
+	"odh-workbench-codeserver-minimal-cpu-py312-ubi9-n":     "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_MINIMAL_CPU_PY312_IMAGE",
 
 	// Jupyter workbenches (latest / -n tags)
 	"odh-workbench-jupyter-baseline-cpu-py312-c9s-n":                "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_BASELINE_CPU_PY312_C9S_IMAGE",
