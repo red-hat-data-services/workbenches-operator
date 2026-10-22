@@ -73,6 +73,8 @@ Do not edit files under `opt/manifests/` manually. After fetching, inspect the t
 
 A scheduled GitHub Action ([`.github/workflows/manifests-sync-main.yaml`](.github/workflows/manifests-sync-main.yaml)) runs daily against `main`, refreshes **ODH** manifests, validates rendering with `TestRenderRealManifests`, and opens/updates a PR when content changes. Pushes to `stable` and `v1.x` (and a daily schedule for `stable`) run [`.github/workflows/manifests-sync-stable.yaml`](.github/workflows/manifests-sync-stable.yaml), which commits fetched manifests directly (`stable` also bumps ODH `branch@sha` pins in `opt/manifest-sources.sh` first; `v1.x` keeps tag pins). Operand refs live in `opt/manifest-sources.sh` and are kept on the target branch by [`.github/workflows/sync-branches.yaml`](.github/workflows/sync-branches.yaml). See [`opt/README.md`](opt/README.md) and [`DEPENDENCIES.md`](DEPENDENCIES.md).
 
+Downstream (`red-hat-data-services/workbenches-operator`) release branches are refreshed separately by the rhods-devops-infra modular-operator manifest sync. That job does not update RHDS `main`. See [DEPENDENCIES.md](DEPENDENCIES.md#upgrading-upstream-manifests) and [`opt/README.md`](opt/README.md).
+
 The main sync workflow needs permission to open PRs: enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a fine-grained personal access token (scoped to this repository with `contents: write` and `pull_requests: write`) as a repository secret. Direct commits on `stable`/`v1.x` also require those branches to allow GitHub Actions to push (or the PAT to bypass branch protection).
 
 Override individual sources:
@@ -475,7 +477,7 @@ Run `make help` for the full list. Common targets:
 | Kustomize | `KUSTOMIZE_VERSION` | v5.6.0 |
 | controller-gen | `CONTROLLER_TOOLS_VERSION` | v0.18.0 |
 | setup-envtest | `ENVTEST_VERSION` | release-0.23 |
-| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.12.2 |
+| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.14.0 |
 
 For Go, dependency, and upstream manifest upgrades, see [`DEPENDENCIES.md`](DEPENDENCIES.md).
 

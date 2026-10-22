@@ -436,7 +436,7 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 		}
 
 		// Requeue immediately to continue provisioning after the first Pending status write.
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 	}
 
 	// Resolve and record namespaces early so error paths still persist them.
