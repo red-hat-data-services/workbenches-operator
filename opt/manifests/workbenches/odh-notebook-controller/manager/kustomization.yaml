@@ -3,5 +3,6 @@ kind: Kustomization
 resources:
 - manager.yaml
 - service.yaml
+- network-policies.yaml
 configurations:
 - params.yaml
