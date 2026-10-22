@@ -42,6 +42,7 @@ type fakeFetcher struct {
 	adherenceErr      error
 	profileCalled     bool
 	adherenceCalled   bool
+	newConfigCalled   bool
 	configFromProfile func(*tls.Config)
 	unsupported       []string
 }
@@ -57,6 +58,7 @@ func (f *fakeFetcher) FetchTLSAdherencePolicy(_ context.Context, _ client.Client
 }
 
 func (f *fakeFetcher) NewTLSConfigFromProfile(_ configv1.TLSProfileSpec) (func(*tls.Config), []string) {
+	f.newConfigCalled = true
 	fn := f.configFromProfile
 	if fn == nil {
 		fn = func(c *tls.Config) {
@@ -241,7 +243,9 @@ func TestBootstrap_UnknownError_Fatal(t *testing.T) {
 
 func TestBootstrap_Success_OpenShift(t *testing.T) {
 	profileSpec := configv1.TLSProfileSpec{
-		Ciphers:       []string{"TLS_AES_128_GCM_SHA256"},
+		// Mixed list: one TLS 1.3-only suite, one RC4 suite, and one this
+		// build can negotiate.
+		Ciphers:       []string{"TLS_AES_128_GCM_SHA256", "TLS_RSA_WITH_RC4_128_SHA", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"},
 		MinTLSVersion: configv1.VersionTLS12,
 	}
 
@@ -276,6 +280,11 @@ func TestBootstrap_Success_OpenShift(t *testing.T) {
 	cfg := applyTLSOpts(result.TLSOpts)
 	if appliedMinVersion != tls.VersionTLS12 {
 		t.Error("expected profile-driven TLS config function to be applied")
+	}
+	// Mixed lists keep their usable subset: the TLS 1.3-only and RC4 IDs are
+	// dropped.
+	if len(cfg.CipherSuites) != 1 || cfg.CipherSuites[0] != tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
+		t.Errorf("expected usable subset [TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256], got %v", cfg.CipherSuites)
 	}
 	// HTTP/2 enabled: expect both h2 and http/1.1
 	if len(cfg.NextProtos) != 2 || cfg.NextProtos[0] != protoH2 || cfg.NextProtos[1] != protoHTTP1 {
@@ -335,7 +344,7 @@ func TestBootstrap_NextProtos_HTTP2Disabled(t *testing.T) {
 	}
 }
 
-func TestBootstrap_AdherenceFetchFailure_NonFatal(t *testing.T) {
+func TestBootstrap_AdherenceFetchTransientError_NonFatalButNotFetched(t *testing.T) {
 	fetcher := &fakeFetcher{
 		profileResult: configv1.TLSProfileSpec{MinTLSVersion: configv1.VersionTLS12},
 		adherenceErr:  errors.NewServiceUnavailable("adherence API down"),
@@ -346,11 +355,229 @@ func TestBootstrap_AdherenceFetchFailure_NonFatal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.TLSAdherenceFetched {
-		t.Error("expected TLSAdherenceFetched=true even on adherence fetch failure")
+	if result.TLSAdherenceFetched {
+		t.Error("expected TLSAdherenceFetched=false on transient adherence fetch failure")
 	}
 	if result.TLSAdherence != configv1.TLSAdherencePolicyNoOpinion {
-		t.Errorf("expected TLSAdherence=NoOpinion on fetch failure, got %q", result.TLSAdherence)
+		t.Errorf("expected zero TLSAdherence on fetch failure, got %q", result.TLSAdherence)
+	}
+}
+
+func TestBootstrap_AdherenceUnsetPolicy_IsAFetchedResult(t *testing.T) {
+	fetcher := &fakeFetcher{
+		profileResult:   configv1.TLSProfileSpec{MinTLSVersion: configv1.VersionTLS12},
+		adherenceResult: configv1.TLSAdherencePolicyNoOpinion,
+	}
+
+	result, err := Bootstrap(context.Background(), nil, false, fetcher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.TLSAdherenceFetched {
+		t.Error("expected TLSAdherenceFetched=true for a successfully unset policy")
+	}
+	if result.TLSAdherence != configv1.TLSAdherencePolicyNoOpinion {
+		t.Errorf("expected TLSAdherence=NoOpinion, got %q", result.TLSAdherence)
+	}
+}
+
+func TestBootstrap_AdherenceDeniedRead_StopsStartup(t *testing.T) {
+	deniedErrors := []struct {
+		name string
+		err  error
+	}{
+		{"Forbidden", errors.NewForbidden(schema.GroupResource{Resource: "apiservers"}, "cluster", stderrors.New("no access"))},
+		{"Unauthorized", errors.NewUnauthorized("bad creds")},
+		{"InternalError", errors.NewInternalError(errBoom)},
+	}
+
+	for _, tc := range deniedErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			fetcher := &fakeFetcher{
+				profileResult: configv1.TLSProfileSpec{MinTLSVersion: configv1.VersionTLS12},
+				adherenceErr:  tc.err,
+			}
+			result, err := Bootstrap(context.Background(), nil, false, fetcher)
+			if err == nil {
+				t.Fatalf("denied adherence read %s must stop startup, got nil error", tc.name)
+			}
+			if result != nil {
+				t.Errorf("expected nil result on denied adherence read %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestBootstrap_ProfileInvalidMinimum_FailsWithoutPanic(t *testing.T) {
+	invalidMinima := []configv1.TLSProtocolVersion{
+		"VersionTLS09",
+		"VersionTLS14",
+		"not-a-version",
+	}
+
+	for _, minVersion := range invalidMinima {
+		t.Run(string(minVersion), func(t *testing.T) {
+			fetcher := &fakeFetcher{
+				profileResult: configv1.TLSProfileSpec{MinTLSVersion: minVersion},
+			}
+			result, err := Bootstrap(context.Background(), nil, false, fetcher)
+			if err == nil {
+				t.Fatalf("invalid minimum %q must fail, got nil error", minVersion)
+			}
+			if result != nil {
+				t.Errorf("expected nil result for invalid minimum %q", minVersion)
+			}
+			if fetcher.newConfigCalled {
+				t.Error("expected NewTLSConfigFromProfile not to be called for an invalid profile")
+			}
+		})
+	}
+}
+
+func TestBootstrap_ProfileNoUsableCipherSuites_Fails(t *testing.T) {
+	unusableProfiles := []struct {
+		name    string
+		profile configv1.TLSProfileSpec
+	}{
+		{
+			name: "TLS 1.3-only suites under a TLS 1.2 minimum",
+			profile: configv1.TLSProfileSpec{
+				Ciphers:       []string{"TLS_AES_128_GCM_SHA256", "TLS_CHACHA20_POLY1305_SHA256"},
+				MinTLSVersion: configv1.VersionTLS12,
+			},
+		},
+		{
+			name: "unresolvable cipher names",
+			profile: configv1.TLSProfileSpec{
+				Ciphers:       []string{"NOT_A_CIPHER", "ALSO_NOT_A_CIPHER"},
+				MinTLSVersion: configv1.VersionTLS12,
+			},
+		},
+		{
+			name: "RC4-only suites are prohibited by RFC 7465",
+			profile: configv1.TLSProfileSpec{
+				Ciphers:       []string{"TLS_RSA_WITH_RC4_128_SHA"},
+				MinTLSVersion: configv1.VersionTLS12,
+			},
+		},
+		{
+			name: "insecure suites no OpenShift profile can name",
+			profile: configv1.TLSProfileSpec{
+				Ciphers:       []string{"ECDHE-RSA-DES-CBC3-SHA"},
+				MinTLSVersion: configv1.VersionTLS12,
+			},
+		},
+	}
+
+	for _, tc := range unusableProfiles {
+		t.Run(tc.name, func(t *testing.T) {
+			fetcher := &fakeFetcher{profileResult: tc.profile}
+			result, err := Bootstrap(context.Background(), nil, false, fetcher)
+			if err == nil {
+				t.Fatalf("profile with no usable cipher suites must fail, got nil error")
+			}
+			if result != nil {
+				t.Errorf("expected nil result for unusable profile %q", tc.name)
+			}
+			if fetcher.newConfigCalled {
+				t.Error("expected NewTLSConfigFromProfile not to be called for an unusable profile")
+			}
+		})
+	}
+}
+
+func TestBootstrap_ProfileModern_RemainsValid(t *testing.T) {
+	modern := *configv1.TLSProfiles[configv1.TLSProfileModernType]
+	fetcher := &fakeFetcher{
+		profileResult: modern,
+		configFromProfile: func(c *tls.Config) {
+			c.MinVersion = tls.VersionTLS13
+		},
+	}
+
+	result, err := Bootstrap(context.Background(), nil, false, fetcher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg := applyTLSOpts(result.TLSOpts)
+	if cfg.MinVersion != tls.VersionTLS13 {
+		t.Errorf("expected MinVersion=TLS13, got %d", cfg.MinVersion)
+	}
+	// TLS 1.3 suites are Go-managed: CipherSuites must never be set.
+	if len(cfg.CipherSuites) != 0 {
+		t.Errorf("expected no CipherSuites for a TLS 1.3 minimum, got %v", cfg.CipherSuites)
+	}
+}
+
+func TestBootstrap_ProfileOld_HonoredExactly(t *testing.T) {
+	old := *configv1.TLSProfiles[configv1.TLSProfileOldType]
+	fetcher := &fakeFetcher{
+		profileResult: old,
+		// Mirror what NewTLSConfigFromProfile applies for the Old profile.
+		configFromProfile: func(c *tls.Config) {
+			c.MinVersion = tls.VersionTLS10
+		},
+	}
+
+	result, err := Bootstrap(context.Background(), nil, false, fetcher)
+	if err != nil {
+		t.Fatalf("Old profile must remain valid: %v", err)
+	}
+
+	cfg := applyTLSOpts(result.TLSOpts)
+	if cfg.MinVersion != tls.VersionTLS10 {
+		t.Errorf("expected MinVersion=TLS10 honored exactly (never floored), got %d", cfg.MinVersion)
+	}
+	if len(cfg.CipherSuites) == 0 {
+		t.Fatal("expected a non-empty usable cipher subset for the Old profile")
+	}
+	implemented := implementedCipherSuites()
+	for _, id := range cfg.CipherSuites {
+		if id >= tls13CipherSuiteFirst && id <= tls13CipherSuiteLast {
+			t.Errorf("TLS 1.3-only cipher 0x%04x must not be set for a TLS 1.0 minimum", id)
+		}
+		if !implemented[id] {
+			t.Errorf("cipher 0x%04x is not implemented by this Go build", id)
+		}
+	}
+	// Insecure-but-implemented suites (DES-CBC3-SHA in the Old profile) stay
+	// usable: the profile is honored rather than narrowed beyond what Go
+	// negotiates.
+	foundDES := false
+	for _, id := range cfg.CipherSuites {
+		if id == tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA {
+			foundDES = true
+		}
+	}
+	if !foundDES {
+		t.Error("expected DES-CBC3-SHA from the Old profile to stay in the usable subset")
+	}
+}
+
+func TestBootstrap_ProfileMixedCiphers_KeepUsableSubset(t *testing.T) {
+	fetcher := &fakeFetcher{
+		profileResult: configv1.TLSProfileSpec{
+			// TLS 1.3-only, OpenSSL-named, and unresolvable entries around a
+			// usable suite: only the usable one survives.
+			Ciphers:       []string{"TLS_AES_128_GCM_SHA256", "ECDHE-RSA-AES128-GCM-SHA256", "NOT_A_CIPHER"},
+			MinTLSVersion: configv1.VersionTLS12,
+		},
+		unsupported: []string{"NOT_A_CIPHER"},
+	}
+
+	result, err := Bootstrap(context.Background(), nil, false, fetcher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg := applyTLSOpts(result.TLSOpts)
+	if len(cfg.CipherSuites) != 1 || cfg.CipherSuites[0] != tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
+		t.Errorf("expected usable subset [TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256], got %v", cfg.CipherSuites)
+	}
+	if len(result.UnsupportedCiphers) != 1 || result.UnsupportedCiphers[0] != "NOT_A_CIPHER" {
+		t.Errorf("expected unsupported=[NOT_A_CIPHER], got %v", result.UnsupportedCiphers)
 	}
 }
 

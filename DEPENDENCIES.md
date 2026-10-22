@@ -82,7 +82,7 @@ Build tool versions are pinned in the `Makefile`. Update the corresponding versi
 | kustomize | `KUSTOMIZE_VERSION` | v5.6.0 |
 | controller-gen | `CONTROLLER_TOOLS_VERSION` | v0.18.0 |
 | setup-envtest | `ENVTEST_VERSION` | release-0.23 |
-| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.12.2 |
+| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.14.0 |
 
 After updating a version, remove the old binary from `bin/` to trigger a fresh download:
 
@@ -116,11 +116,29 @@ sync-branches will not copy it from the source branch.
 
 `ODH_PLATFORM_TYPE` selects which map is used (`OpenDataHub` by default; `rhoai`
 selects RHOAI). Unsupported values exit with an error. Upstream CI and the
-manifest-sync workflows use the ODH map. Downstream
-`red-hat-data-services/workbenches-operator` fetches with `ODH_PLATFORM_TYPE=rhoai`
-so `opt/manifests/` matches the workbench entries in
-[rhods-operator](https://github.com/red-hat-data-services/rhods-operator)
-prefetched manifests for that release branch.
+manifest-sync workflows use the ODH map. `make manifests-fetch ODH_PLATFORM_TYPE=rhoai`
+still fetches downstream sources locally.
+
+Downstream release branches are not refreshed by these workflows. On
+`red-hat-data-services/workbenches-operator`, the
+[modular operators manifest sync](https://github.com/red-hat-data-services/rhods-devops-infra/tree/main/tools/modular-operators-manifest-validator#4-enable-automatic-synchronization)
+in [rhods-devops-infra](https://github.com/red-hat-data-services/rhods-devops-infra)
+writes `opt/manifests/` when `auto-sync` is enabled for `odh-workbenches-operator`.
+Per-release maps live in `tools/modular-operators-manifest-validator/config/`
+(for example `rhoai-3.6.yaml`). The scheduler
+(`.github/workflows/modular-operators-manifest-sync-trigger.yml`) runs for each
+branch in that repo's `src/config/releases.yaml` (for example `rhoai-3.6`).
+Image controllers are copied from the `red-hat-data-services` repository at that
+release-branch tip (`kubeflow`, `workbenches`). `notebooks` has no component
+image; its map entry uses `ref_type: branch` and
+`red-hat-data-services/notebooks` at the same release branch.
+`odh-workbenches-controller` is included from RHOAI 3.6 onward. Earlier release
+maps do not list it. There is no `build/manifests-config.yaml` in this repository.
+The sync does not write RHDS `main`. ODH → RHDS auto-merge already ignores
+`opt/manifests/**`, and RHDS `main` → `rhoai-*` ignores the fetched trees, so
+those manifests on `main` are left as they are.
+`opt/manifests/workbenches/workspacekinds/` is not a mapped dest, so that
+operator-owned tree is left in place. Tracked as RHOAIENG-95169.
 
 ### ODH (upstream) sources
 
