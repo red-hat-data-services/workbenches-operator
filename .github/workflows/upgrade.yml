@@ -2,7 +2,7 @@ name: Upgrade Tests
 
 on:
   push:
-    branches: [main, stable, v1.x]
+    branches: [main, stable]
     paths:
       - "cmd/**"
       - "api/**"
@@ -19,7 +19,7 @@ on:
       - "tests/upgrade/**"
       - ".github/workflows/upgrade.yml"
   pull_request:
-    branches: [main, stable, v1.x]
+    branches: [main, stable]
     paths:
       - "cmd/**"
       - "api/**"
@@ -37,8 +37,12 @@ on:
       - ".github/workflows/upgrade.yml"
   workflow_dispatch:
     inputs:
+      baseline_ref:
+        description: Baseline Helm chart ref (branch, tag, or commit). Empty uses the branch you run from. main and stable select a published image; any other ref also needs baseline_image.
+        required: false
+        default: ""
       baseline_image:
-        description: Baseline image (quay.io/opendatahub/odh-workbenches-operator tag or digest)
+        description: Baseline operator image. Empty uses the published tag when the baseline ref is main or stable. Required for any other ref. When set, this image is installed instead of the published tag.
         required: false
         default: ""
 
@@ -87,7 +91,7 @@ jobs:
 
       - name: Run upgrade test
         env:
-          BASELINE_REF: ${{ github.base_ref || github.ref_name }}
+          BASELINE_REF: ${{ github.event.inputs.baseline_ref || github.base_ref || github.ref_name }}
           INPUT_BASELINE_IMAGE: ${{ github.event.inputs.baseline_image }}
           KIND_CLUSTER_NAME: workbenches-upgrade
         run: bash tests/upgrade/run.sh --mode kind

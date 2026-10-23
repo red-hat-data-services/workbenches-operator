@@ -278,6 +278,16 @@ func ensureWorkbenches() {
 
 	err := k8sClient.Create(ctx, wb)
 	if k8serrors.IsAlreadyExists(err) {
+		existing := getWorkbenches()
+		Expect(existing.Spec.WorkbenchNamespace).To(Equal(legacyWorkbenchNamespace),
+			"pre-existing Workbenches %s has workbenchNamespace %q; this smoke requires %q",
+			existing.Name, existing.Spec.WorkbenchNamespace, legacyWorkbenchNamespace)
+		if existing.Status.ApplicationsNamespace != "" {
+			Expect(existing.Status.ApplicationsNamespace).To(Equal(appsNS),
+				"pre-existing Workbenches %s has applicationsNamespace %q; this smoke requires %q",
+				existing.Name, existing.Status.ApplicationsNamespace, appsNS)
+		}
+
 		return
 	}
 

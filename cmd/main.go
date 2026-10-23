@@ -110,7 +110,11 @@ func main() {
 	}
 
 	restCfg := ctrl.GetConfigOrDie()
-	bootstrapClient, err := client.New(restCfg, client.Options{Scheme: scheme})
+	// Bound the bootstrap client's requests, including REST mapper discovery,
+	// which the bootstrap context does not cover.
+	bootstrapCfg := rest.CopyConfig(restCfg)
+	bootstrapCfg.Timeout = 10 * time.Second
+	bootstrapClient, err := client.New(bootstrapCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		setupLog.Error(err, "unable to create bootstrap client for TLS setup")
 		os.Exit(1)
@@ -121,7 +125,7 @@ func main() {
 	tlsResult, err := tlsconfig.Bootstrap(bootstrapCtx, bootstrapClient, enableHTTP2, tlsconfig.DefaultFetcher())
 	bootstrapCancel()
 	if err != nil {
-		setupLog.Error(err, "unable to read APIServer TLS profile, refusing to start with unknown TLS posture")
+		setupLog.Error(err, "unable to bootstrap TLS configuration, refusing to start with unknown TLS posture")
 		os.Exit(1)
 	}
 	logTLSBootstrapResult(tlsResult)
@@ -312,13 +316,14 @@ func registerTLSProfileWatcher(mgr ctrl.Manager, tlsResult *tlsconfig.BootstrapR
 			setupLog.Info("TLS profile changed, initiating graceful shutdown to reload")
 			cancel()
 		},
-	}
-	if tlsResult.TLSAdherenceFetched {
-		watcher.InitialTLSAdherencePolicy = tlsResult.TLSAdherence
-		watcher.OnAdherencePolicyChange = func(_ context.Context, _, _ configv1.TLSAdherencePolicy) {
+		// Adherence tracking is armed even when the bootstrap read failed
+		// transiently: the assumed NoOpinion then differs from the real policy
+		// and triggers a reload once the watcher observes it.
+		InitialTLSAdherencePolicy: tlsResult.TLSAdherence,
+		OnAdherencePolicyChange: func(_ context.Context, _, _ configv1.TLSAdherencePolicy) {
 			setupLog.Info("TLS adherence policy changed, initiating shutdown to reload")
 			cancel()
-		}
+		},
 	}
 	return watcher.SetupWithManager(mgr)
 }
