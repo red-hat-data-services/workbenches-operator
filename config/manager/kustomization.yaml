@@ -1,4 +1,5 @@
-# TODO: Add networkpolicy.yaml once the operator's target namespace is finalized.
-# Ref: CWE-284 — no default-deny NetworkPolicy in place; cross-pod communication is unrestricted.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
 resources:
 - manager.yaml
+- networkpolicy.yaml
