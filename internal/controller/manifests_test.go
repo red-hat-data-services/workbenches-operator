@@ -28,6 +28,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1951,6 +1952,153 @@ func TestGcOrphanedResourcesSkipsWhenDesiredEmpty(t *testing.T) {
 	}, got); err != nil {
 		t.Fatalf("expected orphan to remain when desired is empty, get error = %v", err)
 	}
+}
+
+func TestGcOrphanedNetworkPolicies(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(networkingv1.AddToScheme(scheme))
+	utilruntime.Must(componentsv1alpha1.AddToScheme(scheme))
+
+	namespace := "test-gc-networkpolicy"
+	componentLabels := map[string]string{
+		metadata.ComponentLabelKey: metadata.LabelTrue,
+		metadata.PartOfLabelKey:    metadata.ComponentLabelValue,
+	}
+	npGVK := schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}
+
+	t.Run("old-name NP is deleted when desired set has renamed NP", func(t *testing.T) {
+		t.Parallel()
+
+		// Desired NP (the renamed policy that the current manifests produce).
+		desiredNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "controller-manager-allow-ports",
+				Namespace: namespace,
+				Labels:    componentLabels,
+			},
+		}
+
+		// Orphan NP (the old name that should be garbage-collected on upgrade).
+		orphanNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "allow-prometheus-scrape",
+				Namespace: namespace,
+				Labels:    componentLabels,
+			},
+		}
+
+		// Unrelated NP (not managed by the operator, must be preserved).
+		unrelatedNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "user-custom-policy",
+				Namespace: namespace,
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(desiredNP, orphanNP, unrelatedNP).
+			Build()
+
+		reconciler := &WorkbenchesReconciler{Client: fakeClient, Scheme: scheme}
+
+		desired := map[objectRef]struct{}{
+			{gvk: npGVK, namespace: namespace, name: "controller-manager-allow-ports"}: {},
+		}
+
+		if err := reconciler.gcOrphanedResources(context.Background(), namespace, desired); err != nil {
+			t.Fatalf("gcOrphanedResources() error = %v", err)
+		}
+
+		got := &networkingv1.NetworkPolicyList{}
+		if err := fakeClient.List(context.Background(), got, client.InNamespace(namespace)); err != nil {
+			t.Fatalf("list NetworkPolicies: %v", err)
+		}
+
+		names := map[string]bool{}
+		for i := range got.Items {
+			names[got.Items[i].Name] = true
+		}
+
+		if !names["controller-manager-allow-ports"] {
+			t.Error("desired NetworkPolicy was deleted")
+		}
+		if names["allow-prometheus-scrape"] {
+			t.Error("orphaned old-name NetworkPolicy was not garbage-collected")
+		}
+		if !names["user-custom-policy"] {
+			t.Error("unrelated (unlabeled) NetworkPolicy should be left alone")
+		}
+	})
+
+	t.Run("desired NP is preserved when no orphans exist", func(t *testing.T) {
+		t.Parallel()
+
+		desiredNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "controller-manager-allow-ports",
+				Namespace: namespace,
+				Labels:    componentLabels,
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(desiredNP).
+			Build()
+
+		reconciler := &WorkbenchesReconciler{Client: fakeClient, Scheme: scheme}
+
+		desired := map[objectRef]struct{}{
+			{gvk: npGVK, namespace: namespace, name: "controller-manager-allow-ports"}: {},
+		}
+
+		if err := reconciler.gcOrphanedResources(context.Background(), namespace, desired); err != nil {
+			t.Fatalf("gcOrphanedResources() error = %v", err)
+		}
+
+		got := &networkingv1.NetworkPolicy{}
+		if err := fakeClient.Get(context.Background(), client.ObjectKey{
+			Namespace: namespace,
+			Name:      "controller-manager-allow-ports",
+		}, got); err != nil {
+			t.Fatal("desired NetworkPolicy was deleted when no orphans exist")
+		}
+	})
+
+	t.Run("GC skips NetworkPolicies when desired set is empty", func(t *testing.T) {
+		t.Parallel()
+
+		orphanNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "allow-prometheus-scrape",
+				Namespace: namespace,
+				Labels:    componentLabels,
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(orphanNP).
+			Build()
+
+		reconciler := &WorkbenchesReconciler{Client: fakeClient, Scheme: scheme}
+
+		if err := reconciler.gcOrphanedResources(context.Background(), namespace, nil); err != nil {
+			t.Fatalf("gcOrphanedResources() error = %v", err)
+		}
+
+		got := &networkingv1.NetworkPolicy{}
+		if err := fakeClient.Get(context.Background(), client.ObjectKey{
+			Namespace: namespace,
+			Name:      "allow-prometheus-scrape",
+		}, got); err != nil {
+			t.Fatal("NetworkPolicy should remain when desired set is empty (safety guard)")
+		}
+	})
 }
 
 func TestCleanupManagedResources(t *testing.T) {

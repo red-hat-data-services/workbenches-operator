@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: controller-manager-allow-ingress
+  name: controller-manager-allow-ports
   namespace: system
   labels:
     control-plane: controller-manager
@@ -12,7 +12,9 @@ spec:
       control-plane: controller-manager
   policyTypes:
   - Ingress
+  - Egress
   ingress:
+  # Permit metrics scraping only from the platform monitoring namespaces.
   # Metrics (TCP 8443): restrict to cluster-monitoring namespaces.
   - ports:
     - port: 8443
@@ -20,12 +22,32 @@ spec:
     from:
     - namespaceSelector:
         matchLabels:
-          network.openshift.io/policy-group: monitoring
+          kubernetes.io/metadata.name: openshift-monitoring
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: openshift-user-workload-monitoring
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: redhat-ods-monitoring
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: opendatahub-monitoring
+  # Kubelet health probes may originate from the node network rather than a pod.
   # Health/readiness probes (TCP 8081): port-scoped, no peer restriction.
+  # Rationale: kubelet probes originate from the node host network and
+  # cannot be constrained by NetworkPolicy peer selectors.
   - ports:
     - port: 8081
       protocol: TCP
+  # Webhook calls from the kube-apiserver may originate from the node network rather than a pod.
   # Webhook server (TCP 9443): port-scoped, no peer restriction.
+  # Rationale: kube-apiserver admission review requests originate from the
+  # host network and cannot be constrained by NetworkPolicy peer selectors.
   - ports:
     - port: 9443
       protocol: TCP
+  # Allow-all egress: the operator reaches the kube-apiserver (dynamic endpoint),
+  # DNS, and operand namespaces that cannot be reliably represented by stable
+  # NetworkPolicy peers.
+  egress:
+  - {}

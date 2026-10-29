@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
 	tlspkg "github.com/openshift/controller-runtime-common/pkg/tls"
@@ -155,22 +156,14 @@ func resolveCipherSuite(name string) (uint16, bool) {
 }
 
 // implementedCipherSuites returns the IDs of every cipher suite implemented
-// by the running Go build that an OpenShift TLS profile can name. RC4 suites
-// are implemented by this build but appear in no OpenShift profile (RFC 7465
-// prohibits RC4), so they are never included.
+// by the running Go build, excluding RC4 suites prohibited by RFC 7465.
 func implementedCipherSuites() map[uint16]bool {
 	implemented := make(map[uint16]bool)
 	for _, suite := range tls.CipherSuites() {
 		implemented[suite.ID] = true
 	}
-	profileNames := make(map[string]bool)
-	for _, spec := range configv1.TLSProfiles {
-		for _, name := range libgocrypto.OpenSSLToIANACipherSuites(spec.Ciphers) {
-			profileNames[name] = true
-		}
-	}
 	for _, suite := range tls.InsecureCipherSuites() {
-		if profileNames[suite.Name] {
+		if !strings.Contains(suite.Name, "RC4") {
 			implemented[suite.ID] = true
 		}
 	}

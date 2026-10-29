@@ -33,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -123,6 +124,117 @@ var _ = Describe("Workbenches Controller", func() {
 				[]byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [deployment.yaml]\n"), 0o600)).To(Succeed())
 		}
 	}
+	Context("Workbench probe configuration", func() {
+		It("Should default and validate the probe timeout in the CRD", func() {
+			wb := createWorkbenches("Managed", "probe-validation-notebooks", "OpenDataHub")
+			DeferCleanup(func() { cleanupWorkbenches(wb) })
+			Expect(getWorkbenches(wb.Name).Spec.ODHNotebookControllerProbe).To(BeNil())
+
+			raw := &unstructured.Unstructured{}
+			raw.SetAPIVersion("components.platform.opendatahub.io/v1alpha1")
+			raw.SetKind("Workbenches")
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: wb.Name}, raw)).To(Succeed())
+			Expect(unstructured.SetNestedMap(raw.Object, map[string]any{}, "spec", "odhNotebookControllerProbe")).To(Succeed())
+			Expect(k8sClient.Update(ctx, raw)).To(Succeed())
+			Expect(getWorkbenches(wb.Name).Spec.ODHNotebookControllerProbe.TimeoutSeconds).To(Equal(int32(1)))
+
+			for _, timeout := range []int64{0, -1, 2147483648} {
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Name: wb.Name}, raw)).To(Succeed())
+				Expect(unstructured.SetNestedField(raw.Object, timeout, "spec", "odhNotebookControllerProbe", "timeoutSeconds")).To(Succeed())
+				Expect(apierrors.IsInvalid(k8sClient.Update(ctx, raw))).To(BeTrue())
+			}
+
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: wb.Name}, raw)).To(Succeed())
+			Expect(unstructured.SetNestedField(raw.Object, int64(2147483647), "spec", "odhNotebookControllerProbe", "timeoutSeconds")).To(Succeed())
+			Expect(k8sClient.Update(ctx, raw)).To(Succeed())
+		})
+
+		DescribeTable("Should reconcile the timeout from the CR into the runtime ConfigMap",
+			func(platformType, namespaceOverride, expectedNamespace string) {
+				reconciler.ApplicationsNamespace = namespaceOverride
+				// Render another resource alongside the shared settings ConfigMap.
+				for _, overlay := range []string{"odh", "rhoai"} {
+					dir := filepath.Join(manifestsDir, "workbenches/odh-notebook-controller/overlays", overlay)
+					Expect(os.WriteFile(filepath.Join(dir, "configmap.yaml"), []byte(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: probe-test-fixture
+data:
+  fixture: unchanged
+`), 0o600)).To(Succeed())
+					Expect(os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- configmap.yaml
+`), 0o600)).To(Succeed())
+				}
+				wb := createWorkbenches("Managed", "probe-policy-notebooks", platformType)
+				cm := &corev1.ConfigMap{}
+				key := client.ObjectKey{Namespace: expectedNamespace, Name: "notebook-controller-setting-config"}
+				DeferCleanup(func() {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+						Name: key.Name, Namespace: key.Namespace,
+					}}))).To(Succeed())
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+						Name: "probe-test-fixture", Namespace: expectedNamespace,
+					}}))).To(Succeed())
+					cleanupWorkbenches(wb)
+					cleanupNamespace("probe-policy-notebooks")
+				})
+
+				_, err := reconcileWorkbenches(reconciler, wb)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, key, cm)).To(Succeed())
+				Expect(cm.Data).To(HaveKeyWithValue("WORKBENCH_PROBE_TIMEOUT_SECONDS", "1"))
+
+				updated := getWorkbenches(wb.Name)
+				updated.Spec.ODHNotebookControllerProbe = &componentsv1alpha1.ODHNotebookControllerProbeSpec{TimeoutSeconds: 5}
+				Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+				_, err = reconcileWorkbenches(reconciler, wb)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, key, cm)).To(Succeed())
+				Expect(cm.Data).To(HaveKeyWithValue("WORKBENCH_PROBE_TIMEOUT_SECONDS", "5"))
+				Expect(cm.Labels).To(HaveKeyWithValue(metadata.ComponentLabelKey, metadata.LabelTrue))
+				Expect(metav1.IsControlledBy(cm, wb)).To(BeTrue())
+
+				// A direct ConfigMap edit must not override the durable CR policy.
+				cm.Data["WORKBENCH_PROBE_TIMEOUT_SECONDS"] = "99"
+				Expect(k8sClient.Update(ctx, cm)).To(Succeed())
+				_, err = reconcileWorkbenches(reconciler, wb)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, key, cm)).To(Succeed())
+				Expect(cm.Data).To(HaveKeyWithValue("WORKBENCH_PROBE_TIMEOUT_SECONDS", "5"))
+
+				updated = getWorkbenches(wb.Name)
+				updated.Spec.ODHNotebookControllerProbe.TimeoutSeconds = 10
+				Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+				_, err = reconcileWorkbenches(reconciler, wb)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, key, cm)).To(Succeed())
+				Expect(cm.Data).To(HaveKeyWithValue("WORKBENCH_PROBE_TIMEOUT_SECONDS", "10"))
+
+				// The settings ConfigMap is shared with controller options outside the probe policy.
+				cm.Data["INJECT_CLUSTER_PROXY_ENV"] = "true"
+				Expect(k8sClient.Update(ctx, cm)).To(Succeed())
+				settingsUID := cm.UID
+
+				updated = getWorkbenches(wb.Name)
+				updated.Spec.ODHNotebookControllerProbe = nil
+				Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+				for range 2 {
+					_, err = reconcileWorkbenches(reconciler, wb)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(k8sClient.Get(ctx, key, cm)).To(Succeed())
+					Expect(cm.UID).To(Equal(settingsUID))
+					Expect(cm.Data).To(HaveKeyWithValue("WORKBENCH_PROBE_TIMEOUT_SECONDS", "1"))
+					Expect(cm.Data).To(HaveKeyWithValue("INJECT_CLUSTER_PROXY_ENV", "true"))
+				}
+			},
+			Entry("OpenDataHub", "OpenDataHub", "", "opendatahub"),
+			Entry("SelfManagedRhoai", "SelfManagedRhoai", "", "redhat-ods-applications"),
+			Entry("namespace override", "OpenDataHub", "custom-probe-applications", "custom-probe-applications"),
+		)
+	})
 
 	Context("When reconciling a managed Workbenches resource", func() {
 		It("Should update notebook controller ingress config", func() {
@@ -137,8 +249,14 @@ var _ = Describe("Workbenches Controller", func() {
 			config := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace},
 			}
-			seed := corev1apply.ConfigMap(config.Name, config.Namespace).WithData(map[string]string{"additionalIngressNames": `["alpha"]`})
+			seed := corev1apply.ConfigMap(config.Name, config.Namespace).WithData(map[string]string{
+				"additionalIngressNames": `["alpha"]`,
+			})
 			Expect(k8sClient.Apply(ctx, seed, client.FieldOwner(controller.FieldOwner), client.ForceOwnership)).To(Succeed())
+			seedContract := corev1apply.ConfigMap(config.Name, config.Namespace).WithData(map[string]string{
+				componentsv1alpha1.IngressContractConfigMapKey: `{"version":"v1","sourceGeneration":3}`,
+			})
+			Expect(k8sClient.Apply(ctx, seedContract, client.FieldOwner("external-manager"), client.ForceOwnership)).To(Succeed())
 			wantIngresses := "[]"
 			failConfig := false
 			deploymentApplies := 0
@@ -163,12 +281,17 @@ var _ = Describe("Workbenches Controller", func() {
 			key := client.ObjectKey{Name: controller.NotebookControllerConfigMap, Namespace: applicationsNamespace}
 			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
 			Expect(config.Data["ingresses"]).To(Equal("[]"))
+			Expect(config.Data).NotTo(HaveKey(componentsv1alpha1.IngressContractConfigMapKey))
 			Expect(config.Data).NotTo(HaveKey("additionalIngressNames"))
 			Expect(metav1.IsControlledBy(config, wb)).To(BeTrue())
 			Expect(config.Labels).To(HaveKeyWithValue(metadata.ComponentLabelKey, metadata.LabelTrue))
 			Expect(config.Labels).To(HaveKeyWithValue(metadata.PartOfLabelKey, metadata.ComponentLabelValue))
 
 			updated := getWorkbenches(wb.Name)
+			updated.Spec.IngressContract = &componentsv1alpha1.IngressContractSpec{
+				Version:          componentsv1alpha1.IngressContractVersionV1,
+				SourceGeneration: 7,
+			}
 			updated.Spec.Ingresses = []componentsv1alpha1.Ingress{
 				{Name: "primary", GatewayName: "default-gateway", GatewayNamespace: "default-ingress", IsDefault: true},
 				{Name: "alpha", GatewayName: "team-gateway", GatewayNamespace: "team-ingress", Hostname: "team.example.com"},
@@ -182,8 +305,12 @@ var _ = Describe("Workbenches Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
 			Expect(config.Data["ingresses"]).To(MatchJSON(wantIngresses))
+			Expect(config.Data[componentsv1alpha1.IngressContractConfigMapKey]).To(MatchJSON(
+				`{"version":"v1","sourceGeneration":7}`,
+			))
 
 			updated = getWorkbenches(wb.Name)
+			updated.Spec.IngressContract = nil
 			updated.Spec.Ingresses = updated.Spec.Ingresses[1:]
 			updated.Spec.Ingresses[0].GatewayName = "replacement-gateway"
 			wantIngresses = `[
@@ -203,6 +330,7 @@ var _ = Describe("Workbenches Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, key, config)).To(Succeed())
 			Expect(config.Data["ingresses"]).To(Equal("[]"))
+			Expect(config.Data).NotTo(HaveKey(componentsv1alpha1.IngressContractConfigMapKey))
 			Expect(deploymentApplies).To(Equal(4))
 
 			failConfig = true
