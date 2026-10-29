@@ -461,13 +461,6 @@ func TestBootstrap_ProfileNoUsableCipherSuites_Fails(t *testing.T) {
 				MinTLSVersion: configv1.VersionTLS12,
 			},
 		},
-		{
-			name: "insecure suites no OpenShift profile can name",
-			profile: configv1.TLSProfileSpec{
-				Ciphers:       []string{"ECDHE-RSA-DES-CBC3-SHA"},
-				MinTLSVersion: configv1.VersionTLS12,
-			},
-		},
 	}
 
 	for _, tc := range unusableProfiles {

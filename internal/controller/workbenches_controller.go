@@ -27,6 +27,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -162,6 +163,7 @@ func (r *WorkbenchesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&rbacv1.ClusterRole{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&admissionregistrationv1.MutatingWebhookConfiguration{}).
 		Owns(&admissionregistrationv1.ValidatingWebhookConfiguration{}).
 		// Deployments also need status (replica) updates, not only generation changes.
@@ -850,6 +852,10 @@ func (r *WorkbenchesReconciler) ensureGeneratedNamespace(
 }
 
 func validateSpec(spec componentsv1alpha1.WorkbenchesSpec) error {
+	if spec.ODHNotebookControllerProbe != nil && spec.ODHNotebookControllerProbe.TimeoutSeconds < 1 {
+		return fmt.Errorf("odhNotebookControllerProbe.timeoutSeconds must be at least 1 second, got %d", spec.ODHNotebookControllerProbe.TimeoutSeconds)
+	}
+
 	if spec.Platform != "" && !platform.IsValid(spec.Platform) {
 		return fmt.Errorf("unsupported platform %q, must be one of: %s, %s",
 			spec.Platform, platform.OpenDataHub, platform.SelfManagedRhoai)

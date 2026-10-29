@@ -28,6 +28,9 @@ const (
 
 	ManagementStateManaged = "Managed"
 	ManagementStateRemoved = "Removed"
+
+	IngressContractVersionV1    = "v1"
+	IngressContractConfigMapKey = "contract"
 )
 
 // WorkbenchesV2Spec configures the workbenches-v2 submodule.
@@ -64,6 +67,32 @@ type Ingress struct {
 
 	// isDefault selects this entry when the Namespace has no ingress annotation.
 	IsDefault bool `json:"isDefault,omitempty"`
+}
+
+// ODHNotebookControllerProbeSpec configures workbench liveness and readiness probes.
+type ODHNotebookControllerProbeSpec struct {
+	// timeoutSeconds is the timeout in seconds enforced on existing liveness and readiness
+	// probes of the main workbench container and its injected kube-rbac-proxy sidecar.
+	// Startup probes and other probe settings are not changed.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2147483647
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+}
+
+// IngressContractSpec identifies the contract and source generation used by
+// the projected ingress data.
+type IngressContractSpec struct {
+	// version identifies the ingress projection contract understood by the
+	// downstream Workbenches and Notebook controllers.
+	// +kubebuilder:validation:Enum=v1
+	// +kubebuilder:validation:MaxLength=2
+	Version string `json:"version"`
+
+	// sourceGeneration is the GatewayConfig generation represented by the
+	// projected ingress data.
+	// +kubebuilder:validation:Minimum=0
+	SourceGeneration int64 `json:"sourceGeneration"`
 }
 
 // WorkbenchesSpec defines the desired state of Workbenches.
@@ -106,6 +135,12 @@ type WorkbenchesSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self.filter(i, has(i.isDefault) && i.isDefault).size() <= 1",message="at most one ingress can be default"
 	Ingresses []Ingress `json:"ingresses,omitempty"`
 
+	// ingressContract identifies the contract and source generation for the
+	// projected ingress data. It is optional until the platform enables the
+	// contract-v1 rollout gate.
+	// +optional
+	IngressContract *IngressContractSpec `json:"ingressContract,omitempty"`
+
 	// platform identifies the platform type (OpenDataHub, SelfManagedRhoai).
 	// Projected by the orchestrator.
 	// +kubebuilder:validation:Enum=OpenDataHub;SelfManagedRhoai
@@ -114,6 +149,11 @@ type WorkbenchesSpec struct {
 	// mlflowEnabled indicates whether the MLflow integration is active.
 	// Projected by the orchestrator from DSC MLflowOperator state.
 	MLflowEnabled bool `json:"mlflowEnabled,omitempty"`
+
+	// odhNotebookControllerProbe configures the notebook controller workbench probe policy.
+	// When omitted, the notebook controller enforces the Kubernetes default timeout of 1 second.
+	// +optional
+	ODHNotebookControllerProbe *ODHNotebookControllerProbeSpec `json:"odhNotebookControllerProbe,omitempty"`
 
 	// workbenchesV2 configures the workbenches-v2 submodule.
 	// When omitted, workbenches-v2 is not deployed (equivalent to managementState: Removed).
