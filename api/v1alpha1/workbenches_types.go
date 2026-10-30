@@ -187,6 +187,26 @@ type Distribution struct {
 	Version string `json:"version,omitempty"`
 }
 
+// IngressContractStatus records the ingress contract observed by the module,
+// including whether the consuming operand rollout has completed.
+type IngressContractStatus struct {
+	// version is the contract version observed in the projected ConfigMap.
+	// +kubebuilder:validation:Enum=v1
+	// +kubebuilder:validation:MaxLength=2
+	Version string `json:"version,omitempty"`
+
+	// sourceGeneration is the GatewayConfig generation observed in the
+	// projected ConfigMap.
+	// +kubebuilder:validation:Minimum=0
+	SourceGeneration int64 `json:"sourceGeneration,omitempty"`
+
+	// deploymentGeneration is the highest generation among the notebook
+	// controller deployments observed to have completed rollout with the
+	// current contract projection.
+	// +kubebuilder:validation:Minimum=0
+	DeploymentGeneration int64 `json:"deploymentGeneration,omitempty"`
+}
+
 // WorkbenchesStatus defines the observed state of Workbenches.
 type WorkbenchesStatus struct {
 	// conditions represent the latest available observations of the component's state.
@@ -222,6 +242,11 @@ type WorkbenchesStatus struct {
 	// notebooks namespace). It is not the operand deploy target; see
 	// status.applicationsNamespace.
 	WorkbenchNamespace string `json:"workbenchNamespace,omitempty"`
+
+	// ingressContract records the observed ingress contract projection and
+	// rollout evidence. Consumed by the platform orchestrator to gate
+	// assigning ingresses to this module.
+	IngressContract IngressContractStatus `json:"ingressContract,omitempty"`
 }
 
 // +kubebuilder:object:root=true

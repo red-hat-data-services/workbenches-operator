@@ -1957,10 +1957,17 @@ func TestGcOrphanedResourcesSkipsWhenDesiredEmpty(t *testing.T) {
 func TestGcOrphanedNetworkPolicies(t *testing.T) {
 	t.Parallel()
 
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(networkingv1.AddToScheme(scheme))
-	utilruntime.Must(componentsv1alpha1.AddToScheme(scheme))
+	// Each parallel subtest gets its own scheme: the fake client lazily
+	// registers unstructured list types on List, and runtime.Scheme is not
+	// safe for concurrent mutation, so a shared scheme races across
+	// parallel subtests.
+	newScheme := func() *runtime.Scheme {
+		scheme := runtime.NewScheme()
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		utilruntime.Must(networkingv1.AddToScheme(scheme))
+		utilruntime.Must(componentsv1alpha1.AddToScheme(scheme))
+		return scheme
+	}
 
 	namespace := "test-gc-networkpolicy"
 	componentLabels := map[string]string{
@@ -1971,6 +1978,8 @@ func TestGcOrphanedNetworkPolicies(t *testing.T) {
 
 	t.Run("old-name NP is deleted when desired set has renamed NP", func(t *testing.T) {
 		t.Parallel()
+
+		scheme := newScheme()
 
 		// Desired NP (the renamed policy that the current manifests produce).
 		desiredNP := &networkingv1.NetworkPolicy{
@@ -2037,6 +2046,8 @@ func TestGcOrphanedNetworkPolicies(t *testing.T) {
 	t.Run("desired NP is preserved when no orphans exist", func(t *testing.T) {
 		t.Parallel()
 
+		scheme := newScheme()
+
 		desiredNP := &networkingv1.NetworkPolicy{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "controller-manager-allow-ports",
@@ -2071,6 +2082,8 @@ func TestGcOrphanedNetworkPolicies(t *testing.T) {
 
 	t.Run("GC skips NetworkPolicies when desired set is empty", func(t *testing.T) {
 		t.Parallel()
+
+		scheme := newScheme()
 
 		orphanNP := &networkingv1.NetworkPolicy{
 			ObjectMeta: metav1.ObjectMeta{

@@ -34,4 +34,11 @@ const (
 	// onto the rendered manifest before SSA — matching the former in-tree
 	// workbenches behavior via opendatahub-operator's MergeDeployments.
 	ManagedAnnotation = "opendatahub.io/managed"
+
+	// IngressContractAnnotationKey is stamped on notebook controller deployment
+	// pod templates with the projected contract. It ties rollout evidence to
+	// contract content: every contract change bumps the deployment generation,
+	// and IngressContractReady only reports True once the rollout carrying the
+	// exact stamp completes.
+	IngressContractAnnotationKey = "opendatahub.io/ingress-contract"
 )
