@@ -170,6 +170,10 @@ func (r *WorkbenchesReconciler) renderAndApply(
 			}
 		}
 
+		if err := stampIngressContract(objects, owner.Spec.IngressContract); err != nil {
+			return fmt.Errorf("failed to stamp ingress contract for %s: %w", group, err)
+		}
+
 		l.Info("rendered manifests", "group", group, "count", len(objects))
 
 		for _, obj := range objects {
@@ -195,6 +199,12 @@ func (r *WorkbenchesReconciler) renderAndApply(
 // applyIngressConfig builds and applies the notebook controller ingress
 // ConfigMap, returning it for desired-set tracking. Ingress assignments are
 // applied first so operand controllers start with their config.
+//
+// Stale contract data is cleared after the apply: omitting the key from the
+// SSA would not remove a value owned by another field manager, and ConfigMap
+// data values are typed strings, so an atomic null in the same payload is
+// coerced to "". Applying first keeps every intermediate state a coherent
+// (ingresses, contract) pair instead of a fail-closed gap.
 func (r *WorkbenchesReconciler) applyIngressConfig(
 	ctx context.Context,
 	owner *componentsv1alpha1.Workbenches,
@@ -235,6 +245,10 @@ func (r *WorkbenchesReconciler) applyIngressConfig(
 	return config, nil
 }
 
+// clearIngressContract removes the contract key from the notebook controller
+// ConfigMap even when another field manager owns it. Server-Side Apply cannot
+// express this: omitting the key keeps foreign-owned data, and a null value is
+// coerced to "" because ConfigMap data values are typed strings.
 func (r *WorkbenchesReconciler) clearIngressContract(ctx context.Context, namespace string) error {
 	config := &corev1.ConfigMap{}
 	key := client.ObjectKey{Name: NotebookControllerConfigMap, Namespace: namespace}
