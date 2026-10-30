@@ -429,6 +429,14 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 | `odh-workbenches-operator-on-pull-request` | PR to that branch | `quay.io/opendatahub/odh-workbenches-operator:odh-pr` (expires after 7d) |
 | `odh-workbenches-operator-on-push` | Push to that branch | `quay.io/opendatahub/odh-workbenches-operator:<tag>` (for example `:main` on `main`, `:odh-stable` on `stable`) |
 
+#### Automated releases
+
+Release managers run **ODH Workbenches Operator Release Pipeline** from `main` with GitHub Actions `workflow_dispatch`. Enter the **next** Tekton tag, including its leading `v`; for example, if `v1.x` currently builds `v1.3.0`, enter `v1.4.0`. The current `v1.x` Tekton tag is the release version promoted into `charts/operator/params.env` and the Helm image defaults, while the input becomes the next `.tekton` build tag. The pipeline fails if the input is equal to or lower than the current push tag.
+
+Leave `allow-sync` disabled unless the ODH branch-sync policy explicitly calls for `main → stable → v1.x` during the release. The release pipeline opens a pull request against `v1.x`; review its diff and merge it to create the matching GitHub Release. The release version is read from the promoted runtime image pin, not from the next Tekton tag.
+
+The release-tag workflow must already exist on `v1.x`. After the workflow changes are merged on `main`, run the normal `main → stable → v1.x` branch sync (or backport the two workflow files) before using the pipeline for the first time. Do not merge a release dry-run pull request.
+
 ## Project layout
 
 ```text
