@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -134,18 +135,9 @@ func (r *WorkbenchesReconciler) renderAndApply(
 
 	groups := manifestGroupsForPlatform(platformType, owner.Spec.IsWorkbenchesV2Managed())
 
-	ingresses, err := json.Marshal(append([]componentsv1alpha1.Ingress{}, owner.Spec.Ingresses...))
+	config, err := r.applyIngressConfig(ctx, owner, namespace)
 	if err != nil {
-		return fmt.Errorf("marshal ingresses: %w", err)
-	}
-	config := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]any{"name": NotebookControllerConfigMap, "namespace": namespace},
-		"data":     map[string]any{"ingresses": string(ingresses)},
-	}}
-	// Apply ingress assignments first so operand controllers start with their config.
-	if err := r.applyObjects(ctx, owner, []*unstructured.Unstructured{config}); err != nil {
-		return fmt.Errorf("failed to apply ingress configuration: %w", err)
+		return err
 	}
 	desired := map[objectRef]struct{}{objectRefFrom(config): {}}
 
@@ -171,6 +163,17 @@ func (r *WorkbenchesReconciler) renderAndApply(
 
 		objects = prepareRenderedObjects(objects)
 
+		if strings.HasPrefix(group, "workbenches/odh-notebook-controller/") {
+			objects, err = configureWorkbenchProbes(objects, owner.Spec.ODHNotebookControllerProbe, namespace)
+			if err != nil {
+				return fmt.Errorf("failed to configure workbench probes: %w", err)
+			}
+		}
+
+		if err := stampIngressContract(objects, owner.Spec.IngressContract); err != nil {
+			return fmt.Errorf("failed to stamp ingress contract for %s: %w", group, err)
+		}
+
 		l.Info("rendered manifests", "group", group, "count", len(objects))
 
 		for _, obj := range objects {
@@ -190,6 +193,84 @@ func (r *WorkbenchesReconciler) renderAndApply(
 		return fmt.Errorf("failed to garbage-collect orphaned resources: %w", err)
 	}
 
+	return nil
+}
+
+// applyIngressConfig builds and applies the notebook controller ingress
+// ConfigMap, returning it for desired-set tracking. Ingress assignments are
+// applied first so operand controllers start with their config.
+//
+// Stale contract data is cleared after the apply: omitting the key from the
+// SSA would not remove a value owned by another field manager, and ConfigMap
+// data values are typed strings, so an atomic null in the same payload is
+// coerced to "". Applying first keeps every intermediate state a coherent
+// (ingresses, contract) pair instead of a fail-closed gap.
+func (r *WorkbenchesReconciler) applyIngressConfig(
+	ctx context.Context,
+	owner *componentsv1alpha1.Workbenches,
+	namespace string,
+) (*unstructured.Unstructured, error) {
+	ingresses, err := json.Marshal(append([]componentsv1alpha1.Ingress{}, owner.Spec.Ingresses...))
+	if err != nil {
+		return nil, fmt.Errorf("marshal ingresses: %w", err)
+	}
+
+	data := map[string]any{"ingresses": string(ingresses)}
+	if owner.Spec.IngressContract != nil {
+		contract, err := json.Marshal(owner.Spec.IngressContract)
+		if err != nil {
+			return nil, fmt.Errorf("marshal ingress contract: %w", err)
+		}
+		data[componentsv1alpha1.IngressContractConfigMapKey] = string(contract)
+	}
+
+	config := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": NotebookControllerConfigMap, "namespace": namespace},
+		"data":     data,
+	}}
+
+	if err := r.applyObjects(ctx, owner, []*unstructured.Unstructured{config}); err != nil {
+		return nil, fmt.Errorf("failed to apply ingress configuration: %w", err)
+	}
+
+	// Clear any stale contract key only after a successful apply: if the apply
+	// fails, the previous contract state must be preserved.
+	if owner.Spec.IngressContract == nil {
+		if err := r.clearIngressContract(ctx, namespace); err != nil {
+			return nil, fmt.Errorf("failed to clear stale ingress contract: %w", err)
+		}
+	}
+
+	return config, nil
+}
+
+// clearIngressContract removes the contract key from the notebook controller
+// ConfigMap even when another field manager owns it. Server-Side Apply cannot
+// express this: omitting the key keeps foreign-owned data, and a null value is
+// coerced to "" because ConfigMap data values are typed strings.
+func (r *WorkbenchesReconciler) clearIngressContract(ctx context.Context, namespace string) error {
+	config := &corev1.ConfigMap{}
+	key := client.ObjectKey{Name: NotebookControllerConfigMap, Namespace: namespace}
+	if err := r.Get(ctx, key, config); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get configmap %s/%s: %w", key.Namespace, key.Name, err)
+	}
+
+	if config.Data == nil {
+		return nil
+	}
+	if _, found := config.Data[componentsv1alpha1.IngressContractConfigMapKey]; !found {
+		return nil
+	}
+
+	original := config.DeepCopy()
+	delete(config.Data, componentsv1alpha1.IngressContractConfigMapKey)
+	if err := r.Patch(ctx, config, client.MergeFrom(original)); err != nil {
+		return fmt.Errorf("patch configmap %s/%s: %w", key.Namespace, key.Name, err)
+	}
 	return nil
 }
 
@@ -684,6 +765,7 @@ var cleanupGVKs = []schema.GroupVersionKind{
 	{Group: "", Version: "v1", Kind: "Secret"},
 	{Group: "", Version: "v1", Kind: kindService},
 	{Group: "", Version: "v1", Kind: "ServiceAccount"},
+	{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"},
 }

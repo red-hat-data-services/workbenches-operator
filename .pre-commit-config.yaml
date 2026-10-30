@@ -19,7 +19,7 @@ repos:
         name: golangci-lint
         entry: golangci-lint run --timeout=5m ./...
         language: golang
-        additional_dependencies: ['github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2']
+        additional_dependencies: ['github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0']
         files: \.go$
         pass_filenames: false
         types: [go]

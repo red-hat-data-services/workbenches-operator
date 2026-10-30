@@ -27,6 +27,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -64,7 +65,10 @@ const (
 	// ImageStreamsAvailable is informational only (matches ODH); it does not gate Ready.
 	conditionTypeImageStreamsAvailable = "ImageStreamsAvailable"
 	// WorkbenchesV2Ready is informational only; it does not gate Ready.
-	conditionTypeWorkbenchesV2Ready     = "WorkbenchesV2Ready"
+	conditionTypeWorkbenchesV2Ready = "WorkbenchesV2Ready"
+	// IngressContractReady reports capability evidence for the platform
+	// orchestrator; it does not gate Ready.
+	conditionTypeIngressContractReady   = "IngressContractReady"
 	conditionReasonImageStreamsNotReady = "ImageStreamsNotReady"
 	conditionReasonUnknown              = "Unknown"
 	conditionReasonAvailable            = "Available"
@@ -162,6 +166,7 @@ func (r *WorkbenchesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&rbacv1.ClusterRole{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&admissionregistrationv1.MutatingWebhookConfiguration{}).
 		Owns(&admissionregistrationv1.ValidatingWebhookConfiguration{}).
 		// Deployments also need status (replica) updates, not only generation changes.
@@ -307,8 +312,15 @@ func (deploymentAvailabilityChangedPredicate) Update(e event.UpdateEvent) bool {
 	oldDesired := deploymentDesiredReplicas(oldDeploy)
 	newDesired := deploymentDesiredReplicas(newDeploy)
 
+	// IngressContractReady evaluates ObservedGeneration, UpdatedReplicas and
+	// total Replicas in addition to availability, so those transitions must
+	// also requeue (e.g. the final rollout update that only bumps
+	// ObservedGeneration).
 	return oldDeploy.Status.ReadyReplicas != newDeploy.Status.ReadyReplicas ||
 		oldDeploy.Status.AvailableReplicas != newDeploy.Status.AvailableReplicas ||
+		oldDeploy.Status.ObservedGeneration != newDeploy.Status.ObservedGeneration ||
+		oldDeploy.Status.UpdatedReplicas != newDeploy.Status.UpdatedReplicas ||
+		oldDeploy.Status.Replicas != newDeploy.Status.Replicas ||
 		oldDesired != newDesired
 }
 
@@ -390,9 +402,18 @@ func (r *WorkbenchesReconciler) reconcileRemoved(ctx context.Context, wb *compon
 		ObservedGeneration: wb.Generation,
 	})
 
+	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+		Type:               conditionTypeIngressContractReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             componentsv1alpha1.ManagementStateRemoved,
+		Message:            "Workbenches component has been removed",
+		ObservedGeneration: wb.Generation,
+	})
+
 	wb.Status.Phase = statusutil.ComputePhase(statusutil.PhaseContext{Removed: true})
 	wb.Status.Releases = nil
 	wb.Status.Distribution = componentsv1alpha1.Distribution{}
+	wb.Status.IngressContract = componentsv1alpha1.IngressContractStatus{}
 	wb.Status.ObservedGeneration = wb.Generation
 
 	sanitizeConditions(wb.Status.Conditions)
@@ -436,7 +457,7 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 		}
 
 		// Requeue immediately to continue provisioning after the first Pending status write.
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 	}
 
 	// Resolve and record namespaces early so error paths still persist them.
@@ -502,6 +523,8 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 	deploymentsReady, deployMsg := r.checkDeployments(ctx, wb)
 	r.setDeploymentCondition(wb, deploymentsReady, deployMsg)
 
+	r.syncIngressContractStatus(ctx, wb)
+
 	r.setWorkbenchesV2Condition(ctx, wb)
 
 	if err = r.syncImageStreamsAvailable(ctx, wb, nsName); err != nil {
@@ -560,7 +583,15 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 
 	l.Info("reconciliation complete", "phase", wb.Status.Phase)
 
+	// Requeue while a configured contract stays unconfirmed: transient
+	// failures reading the ConfigMap or listing deployments produce no watch
+	// event, and without this the condition could stay False until the next
+	// periodic resync. A nil contract (legacy) never polls.
+	ingressContractPending := wb.Spec.IngressContract != nil &&
+		!meta.IsStatusConditionTrue(wb.Status.Conditions, conditionTypeIngressContractReady)
+
 	if !deploymentsReady ||
+		ingressContractPending ||
 		!platformconfig.DistributionAligned(desiredDistribution, wb.Status.Distribution) ||
 		(handshakeRequired && !platformconfig.HandshakeComplete(platformVersion, wb.Status.Releases)) {
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
@@ -850,6 +881,10 @@ func (r *WorkbenchesReconciler) ensureGeneratedNamespace(
 }
 
 func validateSpec(spec componentsv1alpha1.WorkbenchesSpec) error {
+	if spec.ODHNotebookControllerProbe != nil && spec.ODHNotebookControllerProbe.TimeoutSeconds < 1 {
+		return fmt.Errorf("odhNotebookControllerProbe.timeoutSeconds must be at least 1 second, got %d", spec.ODHNotebookControllerProbe.TimeoutSeconds)
+	}
+
 	if spec.Platform != "" && !platform.IsValid(spec.Platform) {
 		return fmt.Errorf("unsupported platform %q, must be one of: %s, %s",
 			spec.Platform, platform.OpenDataHub, platform.SelfManagedRhoai)
@@ -941,6 +976,18 @@ func (r *WorkbenchesReconciler) setErrorStatus(
 
 	wb.Status.Phase = statusutil.ComputePhase(statusutil.PhaseContext{Failed: true})
 	wb.Status.ObservedGeneration = wb.Generation
+
+	// The reconcile failed before the ingress contract evidence could be
+	// refreshed: withdraw it so the platform gate fails closed instead of
+	// trusting capability evidence from a previous generation.
+	wb.Status.IngressContract = componentsv1alpha1.IngressContractStatus{}
+	meta.SetStatusCondition(&wb.Status.Conditions, metav1.Condition{
+		Type:               conditionTypeIngressContractReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             "IngressContractEvidenceStale",
+		Message:            reconcileErr.Error(),
+		ObservedGeneration: wb.Generation,
+	})
 
 	sanitizeConditions(wb.Status.Conditions)
 

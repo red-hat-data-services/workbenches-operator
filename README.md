@@ -73,6 +73,8 @@ Do not edit files under `opt/manifests/` manually. After fetching, inspect the t
 
 A scheduled GitHub Action ([`.github/workflows/manifests-sync-main.yaml`](.github/workflows/manifests-sync-main.yaml)) runs daily against `main`, refreshes **ODH** manifests, validates rendering with `TestRenderRealManifests`, and opens/updates a PR when content changes. Pushes to `stable` and `v1.x` (and a daily schedule for `stable`) run [`.github/workflows/manifests-sync-stable.yaml`](.github/workflows/manifests-sync-stable.yaml), which commits fetched manifests directly (`stable` also bumps ODH `branch@sha` pins in `opt/manifest-sources.sh` first; `v1.x` keeps tag pins). Operand refs live in `opt/manifest-sources.sh` and are kept on the target branch by [`.github/workflows/sync-branches.yaml`](.github/workflows/sync-branches.yaml). See [`opt/README.md`](opt/README.md) and [`DEPENDENCIES.md`](DEPENDENCIES.md).
 
+Downstream (`red-hat-data-services/workbenches-operator`) release branches are refreshed separately by the rhods-devops-infra modular-operator manifest sync. That job does not update RHDS `main`. See [DEPENDENCIES.md](DEPENDENCIES.md#upgrading-upstream-manifests) and [`opt/README.md`](opt/README.md).
+
 The main sync workflow needs permission to open PRs: enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, or configure a fine-grained personal access token (scoped to this repository with `contents: write` and `pull_requests: write`) as a repository secret. Direct commits on `stable`/`v1.x` also require those branches to allow GitHub Actions to push (or the PAT to bypass branch protection).
 
 Override individual sources:
@@ -138,12 +140,40 @@ The Helm chart value `webhooks.tlsProvider` (`openshift`, `certmanager`, or `""`
 | `ingresses` | Optional orchestrator-projected Gateway assignments. Each entry requires `name`, `gatewayName`, and `gatewayNamespace`; `hostname` and `isDefault` are optional. Names must be unique and at most 63 characters. At most one entry can be the default. |
 | `platform` | `OpenDataHub` or `SelfManagedRhoai`. Typically projected by the orchestrator. Controls notebooks overlay and UI `section-title`. |
 | `mlflowEnabled` | Whether MLflow integration is active. Typically projected by the orchestrator. Injected as `mlflow-enabled` into operand manifests. |
+| `odhNotebookControllerProbe.timeoutSeconds` | Cluster-wide timeout in seconds for existing workbench and injected kube-rbac-proxy liveness/readiness probes. Positive int32; defaults to `1`, including when `odhNotebookControllerProbe` is omitted. |
 
 Notebook-controller operands and the platform ConfigMap (`odh-workbenches-config`) always target the **resolved applications namespace**: `APPLICATIONS_NAMESPACE` (Helm `operatorNamespace` / optional `applicationsNamespace`) when set and DNS-1123 valid; otherwise the platform default (`opendatahub` for OpenDataHub, `redhat-ods-applications` for SelfManagedRhoai).
 
 Ingress assignments are forwarded as JSON in `odh-notebook-controller-config.data.ingresses` in that same namespace. The notebook controller matches the Namespace annotation `opendatahub.io/ingress-name` to an entry and uses its explicit Gateway reference. An omitted or empty list preserves its existing default Gateway fallback. The platform orchestrator must project these structured entries; the former names-only projection is insufficient.
 
 Gateway names must be DNS-1123 subdomains of at most 253 characters; Gateway namespaces must be DNS-1123 labels of at most 63 characters. A nonempty `hostname` must be a DNS-1123 subdomain of at most 253 characters (wildcards are not accepted). There is no entry-count limit. Kubernetes enforces the ConfigMap's 1 MiB data limit; if its apply fails, the previous configuration is preserved and operand groups are not applied.
+
+### Workbench probe timeout
+
+Configure the policy on the `Workbenches` CR rather than editing the runtime ConfigMap:
+
+```yaml
+spec:
+  odhNotebookControllerProbe:
+    timeoutSeconds: 5
+```
+
+The operator reconciles this value into `WORKBENCH_PROBE_TIMEOUT_SECONDS` in
+`notebook-controller-setting-config` in the resolved applications namespace,
+creating the ConfigMap if the upstream manifests do not include it. Reconciliation
+restores the CR's value after direct edits to that key. Omitting
+`odhNotebookControllerProbe` resets the key to `"1"` (the Kubernetes default), so
+previously enforced timeouts return to 1 second on the next stop-and-start cycle.
+The shared ConfigMap and unrelated settings are preserved. An omitted policy also
+enforces 1 second on newly created notebooks, overriding any custom timeout on
+the targeted probes.
+
+This requires an ODH notebook controller image with support for the setting
+(RHOAIENG-95168). Its admission webhook applies the timeout to existing liveness
+and readiness probes on the main workbench container and injected kube-rbac-proxy
+sidecar; it does not create probes or alter startup probes. Changes take effect on
+Notebook creation or update, subject to the existing running-workbench restart gate;
+changing the policy does not itself restart running workbenches.
 
 ### Status
 
@@ -399,6 +429,14 @@ Branch sync keeps the target `.tekton/` directory, so do not copy branch-specifi
 | `odh-workbenches-operator-on-pull-request` | PR to that branch | `quay.io/opendatahub/odh-workbenches-operator:odh-pr` (expires after 7d) |
 | `odh-workbenches-operator-on-push` | Push to that branch | `quay.io/opendatahub/odh-workbenches-operator:<tag>` (for example `:main` on `main`, `:odh-stable` on `stable`) |
 
+#### Automated releases
+
+Release managers run **ODH Workbenches Operator Release Pipeline** from `main` with GitHub Actions `workflow_dispatch`. Enter the **next** Tekton tag, including its leading `v`; for example, if `v1.x` currently builds `v1.3.0`, enter `v1.4.0`. The current `v1.x` Tekton tag is the release version promoted into `charts/operator/params.env` and the Helm image defaults, while the input becomes the next `.tekton` build tag. The pipeline fails if the input is equal to or lower than the current push tag.
+
+Leave `allow-sync` disabled unless the ODH branch-sync policy explicitly calls for `main → stable → v1.x` during the release. The release pipeline opens a pull request against `v1.x`; review its diff and merge it to create the matching GitHub Release. The release version is read from the promoted runtime image pin, not from the next Tekton tag.
+
+The release-tag workflow must already exist on `v1.x`. After the workflow changes are merged on `main`, run the normal `main → stable → v1.x` branch sync (or backport the two workflow files) before using the pipeline for the first time. Do not merge a release dry-run pull request.
+
 ## Project layout
 
 ```text
@@ -475,7 +513,7 @@ Run `make help` for the full list. Common targets:
 | Kustomize | `KUSTOMIZE_VERSION` | v5.6.0 |
 | controller-gen | `CONTROLLER_TOOLS_VERSION` | v0.18.0 |
 | setup-envtest | `ENVTEST_VERSION` | release-0.23 |
-| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.12.2 |
+| golangci-lint | `GOLANGCI_LINT_VERSION` | v2.14.0 |
 
 For Go, dependency, and upstream manifest upgrades, see [`DEPENDENCIES.md`](DEPENDENCIES.md).
 
