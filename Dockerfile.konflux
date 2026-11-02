@@ -17,7 +17,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -tags strictfipsruntime -a -ldflags="-s -w" -o manager cmd/main.go
 
 ## Stage 2: Runtime
-FROM registry.redhat.io/ubi9-minimal@sha256:5ed244b62bbf4095080144d9d35eb8fcd3d39a9801f94aadd63b9d10978a01ae
+FROM registry.redhat.io/ubi9-minimal@sha256:dfa0eb04abc59221544e74862432496add1f491f915c9b531880f91affc0e12c
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
