@@ -568,6 +568,7 @@ var cleanupGVKs = []schema.GroupVersionKind{
 	{Group: "", Version: "v1", Kind: "Secret"},
 	{Group: "", Version: "v1", Kind: kindService},
 	{Group: "", Version: "v1", Kind: "ServiceAccount"},
+	{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"},
 }
