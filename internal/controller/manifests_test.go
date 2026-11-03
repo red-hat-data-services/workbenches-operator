@@ -32,6 +32,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -1952,6 +1953,258 @@ func TestGcOrphanedResourcesSkipsWhenDesiredEmpty(t *testing.T) {
 	}, got); err != nil {
 		t.Fatalf("expected orphan to remain when desired is empty, get error = %v", err)
 	}
+}
+
+// TestSetComponentLabelsNetworkPolicyPodSelector pins the interaction between the
+// operator's component-label injection and operating NetworkPolicies.
+//
+// Upstream operand overlays use `labels: includeSelectors: true`, which stamps
+// app.kubernetes.io/part-of (e.g. odh-notebook-controller, kubeflow-workspaces)
+// into both the Deployment selector / pod template and the NetworkPolicy
+// spec.podSelector. setComponentLabels rewrites that label to part-of=workbenches
+// on the workload, so it must rewrite spec.podSelector as well — otherwise the
+// policy applies cleanly but selects zero pods and enforces nothing.
+func TestSetComponentLabelsNetworkPolicyPodSelector(t *testing.T) {
+	t.Parallel()
+
+	np := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       kindNetworkPolicy,
+		"metadata": map[string]any{
+			"name":      "workspaces-controller-allow-ports",
+			"namespace": "redhat-ods-applications",
+		},
+		"spec": map[string]any{
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app":                         "workspaces-controller",
+					"app.kubernetes.io/part-of":   "kubeflow-workspaces",
+					"app.kubernetes.io/name":      "workspaces-controller",
+					"app.kubernetes.io/component": "controller-manager",
+				},
+			},
+			"policyTypes": []any{"Ingress"},
+		},
+	}}
+
+	setComponentLabels(np)
+
+	selector, found, err := unstructured.NestedStringMap(np.Object, "spec", "podSelector", "matchLabels")
+	if err != nil || !found {
+		t.Fatalf("spec.podSelector.matchLabels missing after setComponentLabels (err=%v)", err)
+	}
+
+	if got := selector[metadata.PartOfLabelKey]; got != metadata.ComponentLabelValue {
+		t.Errorf("podSelector %s = %q, want %q (must match the label the operator sets on the pod template)",
+			metadata.PartOfLabelKey, got, metadata.ComponentLabelValue)
+	}
+
+	if got := selector[metadata.ComponentLabelKey]; got != metadata.LabelTrue {
+		t.Errorf("podSelector %s = %q, want %q", metadata.ComponentLabelKey, got, metadata.LabelTrue)
+	}
+
+	// Workload-owned selector labels must survive the rewrite.
+	if got := selector["app.kubernetes.io/name"]; got != "workspaces-controller" {
+		t.Errorf("podSelector dropped unrelated selector label app.kubernetes.io/name, got %q", got)
+	}
+
+	if got := np.GetLabels()[metadata.PartOfLabelKey]; got != metadata.ComponentLabelValue {
+		t.Errorf("object label %s = %q, want %q", metadata.PartOfLabelKey, got, metadata.ComponentLabelValue)
+	}
+}
+
+// TestRenderedNetworkPoliciesSelectWorkloads renders every operand manifest group
+// the way the reconciler does (namespace patched, params injected, component labels
+// applied) and asserts that each NetworkPolicy actually selects the workload it is
+// supposed to protect, and that each rendered workload is selected by at least one
+// policy.
+//
+// This is the regression guard for RHOAIENG-93751: before the podSelector rewrite in
+// setComponentLabels, notebook-controller-allow-ports,
+// workspaces-controller-allow-ports and workspaces-controller-metrics-allow-ports
+// were applied successfully but selected zero pods, so their least-privilege ingress
+// rules were never enforced.
+func TestRenderedNetworkPoliciesSelectWorkloads(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	basePath := filepath.Join(repoRoot, "opt", "manifests")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		t.Fatalf("opt/manifests not found — run 'make manifests-fetch' and commit the result")
+	}
+
+	params := map[string]string{
+		paramSectionTitle:  "Test",
+		paramMLflowEnabled: "false",
+		paramGatewayURL:    "",
+	}
+
+	for _, p := range []string{platform.OpenDataHub, platform.SelfManagedRhoai} {
+		for _, v2Managed := range []bool{false, true} {
+			testName := p
+			if v2Managed {
+				testName += "-workbenchesV2Managed"
+			}
+
+			t.Run(testName, func(t *testing.T) {
+				groups := manifestGroupsForPlatform(p, v2Managed)
+				namespace := platform.DefaultApplicationsNamespace(p)
+
+				workDir := t.TempDir()
+				if err := copyDir(filepath.Join(basePath, "workbenches"), filepath.Join(workDir, "workbenches")); err != nil {
+					t.Fatalf("copyDir() failed: %v", err)
+				}
+
+				for _, group := range groups {
+					t.Run(filepath.Base(group), func(t *testing.T) {
+						renderDir := filepath.Join(workDir, group)
+						if !strings.Contains(group, "workspacekinds/") {
+							if err := patchKustomizeNamespace(renderDir, namespace, logr.Discard()); err != nil {
+								t.Fatalf("patchKustomizeNamespace(%s) failed: %v", group, err)
+							}
+						}
+
+						objects, err := renderKustomize(renderDir, params)
+						if err != nil {
+							t.Fatalf("renderKustomize(%s) failed: %v", group, err)
+						}
+
+						// Mirror the operator: every rendered object goes through
+						// setComponentLabels before SSA.
+						prepared := prepareRenderedObjects(objects)
+						for _, obj := range prepared {
+							setComponentLabels(obj)
+						}
+
+						assertNetworkPoliciesSelectWorkloads(t, prepared)
+					})
+				}
+			})
+		}
+	}
+}
+
+// renderedWorkload is a workload rendered in a manifest group, reduced to the pod
+// template labels that the kubelet stamps on the pods a NetworkPolicy selects.
+type renderedWorkload struct {
+	kind   string
+	name   string
+	labels map[string]string
+}
+
+func (w renderedWorkload) String() string {
+	return w.kind + "/" + w.name
+}
+
+// assertNetworkPoliciesSelectWorkloads checks NetworkPolicy -> workload coverage for
+// one rendered manifest group.
+func assertNetworkPoliciesSelectWorkloads(t *testing.T, objects []*unstructured.Unstructured) {
+	t.Helper()
+
+	var workloads []renderedWorkload
+
+	for _, obj := range objects {
+		podLabels, ok, err := podTemplateLabels(obj)
+		if err != nil {
+			t.Fatalf("%s %s: reading pod template labels: %v", obj.GetKind(), obj.GetName(), err)
+		}
+
+		if ok {
+			workloads = append(workloads, renderedWorkload{kind: obj.GetKind(), name: obj.GetName(), labels: podLabels})
+		}
+	}
+
+	workloadNames := make([]string, 0, len(workloads))
+	for _, w := range workloads {
+		workloadNames = append(workloadNames, w.String())
+	}
+
+	if len(workloadNames) == 0 {
+		workloadNames = []string{"(none)"}
+	}
+
+	selected := make([]bool, len(workloads))
+
+	for _, obj := range objects {
+		if obj.GetKind() != kindNetworkPolicy {
+			continue
+		}
+
+		selector, err := networkPolicySelector(obj)
+		if err != nil {
+			t.Fatalf("%s: invalid spec.podSelector: %v", obj.GetName(), err)
+		}
+
+		if selector.Empty() {
+			t.Errorf("%s: spec.podSelector is empty; the ADR requires a non-empty selector", obj.GetName())
+
+			continue
+		}
+
+		matched := 0
+
+		for i, w := range workloads {
+			if selector.Matches(labels.Set(w.labels)) {
+				matched++
+				selected[i] = true
+			}
+		}
+
+		if matched == 0 {
+			t.Errorf("%s: spec.podSelector %q matches none of the rendered workloads %v — the policy would be applied but enforce nothing",
+				obj.GetName(), selector.String(), workloadNames)
+		}
+	}
+
+	for i, w := range workloads {
+		if !selected[i] {
+			t.Errorf("%s: no rendered NetworkPolicy selects this workload", w)
+		}
+	}
+}
+
+// podTemplateLabels returns the pod template labels of a workload object and whether
+// the object is a workload kind at all.
+func podTemplateLabels(obj *unstructured.Unstructured) (map[string]string, bool, error) {
+	var fields []string
+
+	switch obj.GetKind() {
+	case kindDeployment, "StatefulSet", "DaemonSet", "ReplicaSet", "Job":
+		fields = []string{"spec", "template", "metadata", "labels"}
+	case "CronJob":
+		fields = []string{"spec", "jobTemplate", "spec", "template", "metadata", "labels"}
+	default:
+		return nil, false, nil
+	}
+
+	podLabels, found, err := unstructured.NestedStringMap(obj.Object, fields...)
+	if err != nil {
+		return nil, true, err
+	}
+
+	if !found {
+		podLabels = map[string]string{}
+	}
+
+	return podLabels, true, nil
+}
+
+// networkPolicySelector converts spec.podSelector into a labels.Selector.
+func networkPolicySelector(obj *unstructured.Unstructured) (labels.Selector, error) {
+	raw, found, err := unstructured.NestedMap(obj.Object, "spec", "podSelector")
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		raw = map[string]any{}
+	}
+
+	var selector metav1.LabelSelector
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &selector); err != nil {
+		return nil, err
+	}
+
+	return metav1.LabelSelectorAsSelector(&selector)
 }
 
 func TestGcOrphanedNetworkPolicies(t *testing.T) {
