@@ -54,6 +54,7 @@ const (
 	NotebookControllerConfigMap       = "odh-notebook-controller-config"
 	kindClusterRole                   = "ClusterRole"
 	kindDeployment                    = "Deployment"
+	kindNetworkPolicy                 = "NetworkPolicy"
 	kindService                       = "Service"
 	workspaceKindImageParamsConfigMap = "workspacekind-image-params"
 )
@@ -646,6 +647,17 @@ func setComponentLabels(obj *unstructured.Unstructured) {
 		patchNestedLabels(obj, "spec", "template", "metadata", "labels")
 	case kindService:
 		patchNestedLabels(obj, "spec", "selector")
+	case kindNetworkPolicy:
+		// Upstream operand overlays use `labels: includeSelectors: true`, which
+		// stamps app.kubernetes.io/part-of (e.g. odh-notebook-controller,
+		// kubeflow-workspaces) into BOTH the Deployment selector / pod template
+		// labels and the NetworkPolicy spec.podSelector. The branch above rewrites
+		// that label to part-of=workbenches on the workload, so spec.podSelector
+		// must be rewritten the same way: otherwise the policy applies cleanly but
+		// selects zero pods and enforces nothing (observed on RHOAI 3.6 for
+		// notebook-controller-allow-ports and workspaces-controller-*-allow-ports).
+		// matchExpressions are not rewritten: no upstream operand policy uses them.
+		patchNestedLabels(obj, "spec", "podSelector", "matchLabels")
 	}
 }
 
