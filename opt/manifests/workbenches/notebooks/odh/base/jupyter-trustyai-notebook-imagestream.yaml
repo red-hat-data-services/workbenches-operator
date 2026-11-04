@@ -24,7 +24,7 @@ spec:
         # language=json
         opendatahub.io/notebook-python-dependencies: |
           [
-            {"name": "JupyterLab", "version": "4.5"},
+            {"name": "JupyterLab", "version": "4.6"},
             {"name": "TrustyAI", "version": "0.6"},
             {"name": "Transformers", "version": "5.14"},
             {"name": "Datasets", "version": "5.0"},
@@ -46,7 +46,7 @@ spec:
             {"name": "Psycopg", "version": "3.3"},
             {"name": "MySQL Connector/Python", "version": "9.7"},
             {"name": "Kubeflow-Training", "version": "1.9"},
-            {"name": "MLflow", "version": "3.14"},
+            {"name": "MLflow", "version": "3.15"},
             {"name": "Feast", "version": "0.64"}
           ]
         openshift.io/imported-from: quay.io/opendatahub/odh-workbench-jupyter-trustyai-cpu-py312-ubi9
