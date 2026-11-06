@@ -79,6 +79,8 @@ func TestApplyRelatedImageParamsUpdatesControllersAndLatest(t *testing.T) {
 			return "registry.redhat.io/rhoai/odh-kube-rbac-proxy-rhel9@sha256:proxy"
 		case "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_CPU_PY312_IMAGE":
 			return "registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:nb"
+		case "RELATED_IMAGE_ODH_WORKBENCH_CODESERVER_MINIMAL_CPU_PY312_IMAGE":
+			return "registry.redhat.io/rhoai/odh-workbench-codeserver-minimal-cpu-py312-rhel9@sha256:cs"
 		default:
 			return ""
 		}
@@ -98,6 +100,8 @@ func TestApplyRelatedImageParamsUpdatesControllersAndLatest(t *testing.T) {
 		"mlflow-enabled=false\n"
 
 	paramsLatest := "odh-workbench-jupyter-minimal-cpu-py312-ubi9-n=dummy\n" +
+		"odh-workbench-codeserver-minimal-cpu-py312-n=dummy\n" +
+		"odh-workbench-codeserver-minimal-cpu-py312-ubi9-n=dummy\n" +
 		"odh-workbench-jupyter-datascience-cpu-py312-ubi9-n=dummy\n"
 
 	if err := fSys.WriteFile(filepath.Join(dir, "params.env"), []byte(paramsEnv)); err != nil {
@@ -143,6 +147,14 @@ func TestApplyRelatedImageParamsUpdatesControllersAndLatest(t *testing.T) {
 
 	if !strings.Contains(latestContent, "odh-workbench-jupyter-minimal-cpu-py312-ubi9-n=registry.redhat.io/rhoai/odh-workbench-jupyter-minimal-cpu-py312-rhel9@sha256:nb") {
 		t.Errorf("params-latest.env minimal image not updated:\n%s", latestContent)
+	}
+
+	if !strings.Contains(latestContent, "odh-workbench-codeserver-minimal-cpu-py312-ubi9-n=registry.redhat.io/rhoai/odh-workbench-codeserver-minimal-cpu-py312-rhel9@sha256:cs") {
+		t.Errorf("params-latest.env Code Server Minimal image not updated:\n%s", latestContent)
+	}
+
+	if !strings.Contains(latestContent, "odh-workbench-codeserver-minimal-cpu-py312-n=registry.redhat.io/rhoai/odh-workbench-codeserver-minimal-cpu-py312-rhel9@sha256:cs") {
+		t.Errorf("params-latest.env upstream Code Server Minimal image not updated:\n%s", latestContent)
 	}
 
 	// Unmapped / unset RELATED_IMAGE keys must stay as bundled defaults.

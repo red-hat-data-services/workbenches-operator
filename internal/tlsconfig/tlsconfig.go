@@ -22,9 +22,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
 	tlspkg "github.com/openshift/controller-runtime-common/pkg/tls"
+	libgocrypto "github.com/openshift/library-go/pkg/crypto"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +36,12 @@ import (
 const (
 	protoH2    = "h2"
 	protoHTTP1 = "http/1.1"
+
+	// tls13CipherSuiteFirst and tls13CipherSuiteLast bound the IANA IDs
+	// reserved for TLS 1.3 cipher suites. Go manages those suites itself and
+	// never negotiates them through Config.CipherSuites.
+	tls13CipherSuiteFirst = 0x1300
+	tls13CipherSuiteLast  = 0x13ff
 )
 
 // IntermediateCiphers is the Mozilla Intermediate cipher set, used as the
@@ -95,15 +104,92 @@ func isTransientAPIError(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
+// validateProfile resolves the profile's minimum TLS version and the cipher
+// suites the running Go implementation can negotiate for minimums below
+// TLS 1.3. It reports invalid minima as errors instead of letting
+// NewTLSConfigFromProfile panic on them, and rejects cipher requests with no
+// usable suite, which would otherwise silently widen to Go's default suites.
+func validateProfile(profile configv1.TLSProfileSpec) (minVersion uint16, usableSuites []uint16, err error) {
+	minVersion, err = libgocrypto.TLSVersion(string(profile.MinTLSVersion))
+	if err != nil {
+		return 0, nil, fmt.Errorf("invalid minimum TLS version %q: %w", profile.MinTLSVersion, err)
+	}
+	// Go 1.22+ defaults the server minimum to TLS 1.2 only when tls.Config.MinVersion
+	// is unset; the explicit minimum set here needs no GODEBUG.
+	if minVersion >= tls.VersionTLS13 {
+		// TLS 1.3 cipher suites are Go-managed and never set through CipherSuites.
+		return minVersion, nil, nil
+	}
+	if len(profile.Ciphers) == 0 {
+		// No cipher request: leave CipherSuites unset so Go's defaults apply.
+		return minVersion, nil, nil
+	}
+
+	implemented := implementedCipherSuites()
+	for _, cipher := range profile.Ciphers {
+		id, ok := resolveCipherSuite(cipher)
+		if !ok || (id >= tls13CipherSuiteFirst && id <= tls13CipherSuiteLast) || !implemented[id] {
+			continue
+		}
+		usableSuites = append(usableSuites, id)
+	}
+	if len(usableSuites) == 0 {
+		return 0, nil, fmt.Errorf("no cipher suite in the profile is negotiable by this Go build for minimum TLS version %q: %v",
+			profile.MinTLSVersion, profile.Ciphers)
+	}
+	return minVersion, usableSuites, nil
+}
+
+// resolveCipherSuite maps an IANA or OpenSSL cipher suite name to its IANA ID,
+// mirroring the resolution inside NewTLSConfigFromProfile.
+func resolveCipherSuite(name string) (uint16, bool) {
+	if id, err := libgocrypto.CipherSuite(name); err == nil {
+		return id, true
+	}
+	iana := libgocrypto.OpenSSLToIANACipherSuites([]string{name})
+	if len(iana) == 1 {
+		if id, err := libgocrypto.CipherSuite(iana[0]); err == nil {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// implementedCipherSuites returns the IDs of every cipher suite implemented
+// by the running Go build, excluding RC4 suites prohibited by RFC 7465.
+func implementedCipherSuites() map[uint16]bool {
+	implemented := make(map[uint16]bool)
+	for _, suite := range tls.CipherSuites() {
+		implemented[suite.ID] = true
+	}
+	for _, suite := range tls.InsecureCipherSuites() {
+		if !strings.Contains(suite.Name, "RC4") {
+			implemented[suite.ID] = true
+		}
+	}
+	return implemented
+}
+
 // Bootstrap fetches the OpenShift cluster TLS profile and adherence policy,
 // classifies errors, and returns a BootstrapResult with configured TLS options.
 //
-// Error classification:
+// Profile error classification:
 //   - NoMatchError (non-OpenShift): hardened defaults, no watcher
 //   - NotFound (APIServer missing): hardened defaults, no watcher
 //   - Transient (503/timeout/429): hardened defaults, watcher enabled for self-healing
 //   - Success: profile-driven config, watcher enabled
-//   - Unknown error: returned as error (caller should exit)
+//   - Unusable profile (invalid minimum TLS version, or no cipher suite
+//     negotiable by this Go build) or unknown error: returned as error
+//     (caller should exit)
+//
+// Adherence policy classification:
+//   - Success (including a successfully unset NoOpinion policy): stored with
+//     TLSAdherenceFetched=true
+//   - NoMatchError/NotFound/transient error: TLSAdherenceFetched stays false so
+//     an unreadable policy stays distinct from a successfully unset one; the
+//     watcher self-heals when the API recovers
+//   - Forbidden/Unauthorized and unknown errors: returned as error (caller
+//     should exit instead of assuming NoOpinion)
 func Bootstrap(ctx context.Context, k8sClient client.Client, enableHTTP2 bool, fetcher ProfileFetcher) (*BootstrapResult, error) {
 	nextProtos := []string{protoH2, protoHTTP1}
 	if !enableHTTP2 {
@@ -132,22 +218,41 @@ func Bootstrap(ctx context.Context, k8sClient client.Client, enableHTTP2 bool, f
 	} else {
 		result.HasOpenShiftConfigAPI = true
 		result.Profile = profile
+		// Validate before NewTLSConfigFromProfile: its TLSVersionOrDie would
+		// panic on the same invalid minima.
+		minVersion, usableSuites, verr := validateProfile(profile)
+		if verr != nil {
+			return nil, fmt.Errorf("unusable APIServer TLS profile: %w", verr)
+		}
 		tlsConfigFn, unsupported := fetcher.NewTLSConfigFromProfile(profile)
 		result.UnsupportedCiphers = unsupported
-		result.TLSOpts = append(result.TLSOpts, tlsConfigFn, func(c *tls.Config) {
+		result.TLSOpts = append(result.TLSOpts, tlsConfigFn)
+		if minVersion < tls.VersionTLS13 && len(usableSuites) > 0 {
+			// Mixed lists keep their usable subset: the helper also passes
+			// through TLS 1.3-only IDs, inert for TLS <= 1.2 handshakes.
+			result.TLSOpts = append(result.TLSOpts, func(c *tls.Config) {
+				c.CipherSuites = usableSuites
+			})
+		}
+		result.TLSOpts = append(result.TLSOpts, func(c *tls.Config) {
 			c.NextProtos = nextProtos
 		})
 	}
 
 	if result.HasOpenShiftConfigAPI {
 		adherence, adherenceErr := fetcher.FetchTLSAdherencePolicy(ctx, k8sClient)
-		if adherenceErr != nil {
-			// Non-fatal: watcher will self-heal when the API recovers.
-			result.TLSAdherence = configv1.TLSAdherencePolicyNoOpinion
-		} else {
+		switch {
+		case adherenceErr == nil:
 			result.TLSAdherence = adherence
+			result.TLSAdherenceFetched = true
+		case apimeta.IsNoMatchError(adherenceErr), k8serr.IsNotFound(adherenceErr), isTransientAPIError(adherenceErr):
+			// Recoverable: TLSAdherenceFetched stays false so an unreadable
+			// policy stays distinct from a successfully unset one.
+		default:
+			// Forbidden/Unauthorized and unknown errors leave the adherence
+			// posture unknowable: refuse to start rather than assume NoOpinion.
+			return nil, fmt.Errorf("unable to fetch TLS adherence policy: %w", adherenceErr)
 		}
-		result.TLSAdherenceFetched = true
 	}
 
 	return result, nil

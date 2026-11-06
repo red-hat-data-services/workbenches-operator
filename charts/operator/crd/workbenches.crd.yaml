@@ -130,6 +130,22 @@ spec:
                   mlflowEnabled indicates whether the MLflow integration is active.
                   Projected by the orchestrator from DSC MLflowOperator state.
                 type: boolean
+              odhNotebookControllerProbe:
+                description: |-
+                  odhNotebookControllerProbe configures the notebook controller workbench probe policy.
+                  When omitted, the notebook controller enforces the Kubernetes default timeout of 1 second.
+                properties:
+                  timeoutSeconds:
+                    default: 1
+                    description: |-
+                      timeoutSeconds is the timeout in seconds enforced on existing liveness and readiness
+                      probes of the main workbench container and its injected kube-rbac-proxy sidecar.
+                      Startup probes and other probe settings are not changed.
+                    format: int32
+                    maximum: 2147483647
+                    minimum: 1
+                    type: integer
+                type: object
               platform:
                 description: |-
                   platform identifies the platform type (OpenDataHub, SelfManagedRhoai).

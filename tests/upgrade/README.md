@@ -34,14 +34,14 @@ If a pause Notebook does not become Ready, the prepare phase fails. The pod chec
 
 ## Baseline images
 
-The baseline chart comes from the base ref. The baseline image is the published tag for that branch, resolved to the digest that was pulled:
+The baseline chart comes from git. The baseline image is a separate container. For `main` and `stable` the image is the published tag, resolved to the digest that was pulled. That tag can lag the chart commit until Konflux publishes.
 
 | Ref | Image |
 | --- | --- |
 | `main` | `quay.io/opendatahub/odh-workbenches-operator:main` |
 | `stable` | `quay.io/opendatahub/odh-workbenches-operator:odh-stable` |
 
-Other refs need `--baseline-image`. The image must be `quay.io/opendatahub/odh-workbenches-operator` with a tag or a `sha256` digest. `:main` can lag git `main` until Konflux publishes the next push.
+Other refs need `--baseline-image`. The image must be `quay.io/opendatahub/odh-workbenches-operator` with a tag or a `sha256` digest. Nothing checks that the image was built from the chart commit.
 
 Kind deploys the loaded tag with `imagePullPolicy: Never`. OpenShift deploys the digest.
 
@@ -87,7 +87,7 @@ KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name workbenches-upgrade
 
 ## OpenShift
 
-Uses the current kube context. This installs into that cluster.
+Uses the current kube context. This installs into that cluster. If `default-workbenches` already exists, `spec.workbenchNamespace` must be `e2e-legacy-notebooks`, and a non-empty `status.applicationsNamespace` must match `APPLICATIONS_NAMESPACE` (default `opendatahub`). Prepare fails otherwise.
 
 ```sh
 export UPGRADE_ALLOW_EXISTING_CLUSTER=1
@@ -99,9 +99,18 @@ bash tests/upgrade/run.sh \
 
 ## CI
 
-[`.github/workflows/upgrade.yml`](../../.github/workflows/upgrade.yml) runs the Kind path on pull requests and pushes to `main`, `stable`, and `v1.x`. `v1.x` has no default image mapping, so that branch needs a `workflow_dispatch` `baseline_image` until one is added.
+[`.github/workflows/upgrade.yml`](../../.github/workflows/upgrade.yml) runs the Kind path on pull requests and pushes to `main` and `stable`. `v1.x` is not in those triggers: that branch has no published baseline image, so an automatic run would exit before install.
 
-`workflow_dispatch` passes `baseline_image` through the step environment. The script accepts only `quay.io/opendatahub/odh-workbenches-operator` references.
+Pull requests install the chart at the base branch tip and the published image for that branch name (`:main` or `:odh-stable`). Pushes install the chart from the previous commit and that same published image. The image is not the build of that chart commit.
+
+A manual run uses the branch selected in GitHub as the upgrade target. Pass either input, or neither:
+
+- Neither: the baseline chart and the image name both come from that branch. This works for `main` and `stable`.
+- `baseline_ref` only: install that chart. `main` and `stable` still select their published images.
+- `baseline_image` only: keep the selected branch's chart and install this image instead of the published tag.
+- A commit, or any other ref, has no published image, so `baseline_image` is required too.
+
+The image must be `quay.io/opendatahub/odh-workbenches-operator` with a tag or a `sha256` digest.
 
 Failure diagnostics are written to `tests/upgrade/artifacts/` (gitignored). Credential-like assignments are redacted. The upload does not include Notebook or Secret objects.
 

@@ -1,0 +1,161 @@
+name: ODH Workbenches Operator Release Tag
+
+on:
+  push:
+    branches:
+      - v1.x
+    paths:
+      - ".tekton/odh-workbenches-operator-push.yaml"
+
+permissions: {}
+
+env:
+  REPO: ${{ github.repository }}
+  TEKTON_PUSH_FILE: .tekton/odh-workbenches-operator-push.yaml
+  IMAGE_REF: quay.io/opendatahub/odh-workbenches-operator
+  PARAMS_ENV_FILE: charts/operator/params.env
+  PARAMS_ENV_KEY: workbenches-operator-image
+  VALUES_FILE: charts/operator/values.yaml
+  VALUES_IMAGE_KEY: workbenchesOperatorImage
+
+jobs:
+  detect-release:
+    name: Detect release commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check whether the runtime image pin was promoted
+        id: check
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "First push to branch - no previous commit is available for comparison."
+            exit 0
+          fi
+
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}"; then
+            git fetch --depth=1 origin "$BEFORE_SHA"
+          fi
+
+          ESCAPED_REF="${IMAGE_REF//./\\.}"
+
+          extract_pin() {
+            local revision="$1"
+            git show "${revision}:${PARAMS_ENV_FILE}" 2>/dev/null \
+              | grep -oP "^${PARAMS_ENV_KEY}=${ESCAPED_REF}:\K[A-Za-z0-9_][A-Za-z0-9._-]{0,127}[[:space:]]*$" \
+              || true
+          }
+
+          OLD_PIN="$(extract_pin "$BEFORE_SHA")"
+          NEW_PIN="$(extract_pin "$AFTER_SHA")"
+
+          echo "Runtime image pin before push: ${OLD_PIN:-<missing>}"
+          echo "Runtime image pin after push: ${NEW_PIN:-<missing>}"
+
+          if [[ -n "$NEW_PIN" && "$OLD_PIN" != "$NEW_PIN" ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "The runtime image pin changed; treating this push as a release."
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "The runtime image pin did not change; skipping release creation."
+          fi
+
+  create-release:
+    name: Create GitHub Release
+    needs: detect-release
+    if: ${{ needs.detect-release.outputs.is_release == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Extract release version
+        id: extract-version
+        run: |
+          set -euo pipefail
+
+          ESCAPED_REF="${IMAGE_REF//./\\.}"
+          VERSION="$(grep -oP "^${PARAMS_ENV_KEY}=${ESCAPED_REF}:\K[A-Za-z0-9_][A-Za-z0-9._-]{0,127}[[:space:]]*$" "$PARAMS_ENV_FILE" || true)"
+          VERSION_COUNT="$(printf '%s\n' "$VERSION" | grep -c . || true)"
+          if [[ "$VERSION_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one ${PARAMS_ENV_KEY} entry for $IMAGE_REF in $PARAMS_ENV_FILE, found $VERSION_COUNT"
+            exit 1
+          fi
+          VERSION="$(printf '%s\n' "$VERSION" | head -n1)"
+
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::Invalid release version extracted from $PARAMS_ENV_FILE: $VERSION"
+            exit 1
+          fi
+
+          VALUES_IMAGE_COUNT="$(grep -Ec "^[[:space:]]*${VALUES_IMAGE_KEY}:[[:space:]]+${ESCAPED_REF}:${VERSION}[[:space:]]*$" "$VALUES_FILE" || true)"
+          if [[ "$VALUES_IMAGE_COUNT" -ne 1 ]]; then
+            echo "::error::$VALUES_FILE must contain exactly one ${VALUES_IMAGE_KEY} entry matching ${IMAGE_REF}:${VERSION}"
+            exit 1
+          fi
+
+          VALUES_TAG_COUNT="$(grep -Ec "^[[:space:]]*tag:[[:space:]]+${VERSION}[[:space:]]*$" "$VALUES_FILE" || true)"
+          if [[ "$VALUES_TAG_COUNT" -ne 1 ]]; then
+            echo "::error::$VALUES_FILE must contain exactly one image.tag entry matching ${VERSION}"
+            exit 1
+          fi
+
+          echo "Extracted release version from $PARAMS_ENV_FILE: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the release already exists
+        id: check-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.extract-version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$VERSION" --repo "$REPO" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "GitHub Release $VERSION already exists; skipping creation."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "GitHub Release $VERSION does not exist; it will be created."
+          fi
+
+      - name: Create GitHub Release
+        if: ${{ steps.check-release.outputs.exists == 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.extract-version.outputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          gh release create "$VERSION" \
+            --repo "$REPO" \
+            --title "$VERSION" \
+            --target "$TARGET_SHA" \
+            --generate-notes
+
+          {
+            echo "## Release Created"
+            echo ""
+            echo "- Version: \`$VERSION\`"
+            echo "- URL: https://github.com/$REPO/releases/tag/$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"

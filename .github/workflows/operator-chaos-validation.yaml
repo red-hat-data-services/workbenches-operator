@@ -177,9 +177,18 @@ jobs:
             --source-crds "${source_dir}" \
             --target-crds "${target_dir}"
 
+          # Field removals in alpha/beta API versions are allowed per
+          # Kubernetes API conventions: those versions carry no compatibility
+          # guarantees. Everything else flagged Breaking fails the build.
           crd_breaking=$(jq -r '
-            reduce ((.crds // [])[]?.apiVersions[]?.schemaChanges[]?) as $change
-              (0; if ($change.severity | ascii_downcase) == "breaking" then . + 1 else . end)
+            reduce (.crds // [])[]?.apiVersions[]? as $apiVersion
+              (0; reduce ($apiVersion.schemaChanges[]?) as $change
+                (.;
+                 if (($change.severity | ascii_downcase) == "breaking"
+                     and ($apiVersion.version | test("alpha|beta"))
+                     and ($change.type == "FieldRemoved")) then .
+                 elif ($change.severity | ascii_downcase) == "breaking" then . + 1
+                 else . end))
           ' "${crd_diff_json}")
           if (( crd_breaking > 0 )); then
             echo "operator-chaos detected ${crd_breaking} breaking CRD schema change(s)."

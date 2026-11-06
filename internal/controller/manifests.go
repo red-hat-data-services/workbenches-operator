@@ -51,8 +51,10 @@ const (
 	FieldOwner = "workbenches-operator"
 	// NotebookControllerConfigMap holds the projected notebook ingress assignments.
 	NotebookControllerConfigMap       = "odh-notebook-controller-config"
+	IngressesConfigMapKey             = "ingresses"
 	kindClusterRole                   = "ClusterRole"
 	kindDeployment                    = "Deployment"
+	kindNetworkPolicy                 = "NetworkPolicy"
 	kindService                       = "Service"
 	workspaceKindImageParamsConfigMap = "workspacekind-image-params"
 )
@@ -134,18 +136,9 @@ func (r *WorkbenchesReconciler) renderAndApply(
 
 	groups := manifestGroupsForPlatform(platformType, owner.Spec.IsWorkbenchesV2Managed())
 
-	ingresses, err := json.Marshal(append([]componentsv1alpha1.Ingress{}, owner.Spec.Ingresses...))
+	config, err := r.applyIngressConfig(ctx, owner, namespace)
 	if err != nil {
-		return fmt.Errorf("marshal ingresses: %w", err)
-	}
-	config := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]any{"name": NotebookControllerConfigMap, "namespace": namespace},
-		"data":     map[string]any{"ingresses": string(ingresses)},
-	}}
-	// Apply ingress assignments first so operand controllers start with their config.
-	if err := r.applyObjects(ctx, owner, []*unstructured.Unstructured{config}); err != nil {
-		return fmt.Errorf("failed to apply ingress configuration: %w", err)
+		return err
 	}
 	desired := map[objectRef]struct{}{objectRefFrom(config): {}}
 
@@ -171,6 +164,13 @@ func (r *WorkbenchesReconciler) renderAndApply(
 
 		objects = prepareRenderedObjects(objects)
 
+		if strings.HasPrefix(group, "workbenches/odh-notebook-controller/") {
+			objects, err = configureWorkbenchProbes(objects, owner.Spec.ODHNotebookControllerProbe, namespace)
+			if err != nil {
+				return fmt.Errorf("failed to configure workbench probes: %w", err)
+			}
+		}
+
 		l.Info("rendered manifests", "group", group, "count", len(objects))
 
 		for _, obj := range objects {
@@ -191,6 +191,38 @@ func (r *WorkbenchesReconciler) renderAndApply(
 	}
 
 	return nil
+}
+
+// applyIngressConfig builds and applies the notebook controller ingress
+// ConfigMap, returning it for desired-set tracking. Ingress assignments are
+// applied first so operand controllers start with their config. The consumer
+// reads the ConfigMap dynamically on each reconciliation, so no operand
+// rollout is involved in delivery.
+func (r *WorkbenchesReconciler) applyIngressConfig(
+	ctx context.Context,
+	owner *componentsv1alpha1.Workbenches,
+	namespace string,
+) (*unstructured.Unstructured, error) {
+	ingresses, err := json.Marshal(append([]componentsv1alpha1.Ingress{}, owner.Spec.Ingresses...))
+	if err != nil {
+		return nil, fmt.Errorf("marshal ingresses: %w", err)
+	}
+
+	data := map[string]any{
+		IngressesConfigMapKey: string(ingresses),
+	}
+
+	config := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": NotebookControllerConfigMap, "namespace": namespace},
+		"data":     data,
+	}}
+
+	if err := r.applyObjects(ctx, owner, []*unstructured.Unstructured{config}); err != nil {
+		return nil, fmt.Errorf("failed to apply ingress configuration: %w", err)
+	}
+
+	return config, nil
 }
 
 // copyDir recursively copies src to dst, creating dst and all subdirectories.
@@ -565,6 +597,17 @@ func setComponentLabels(obj *unstructured.Unstructured) {
 		patchNestedLabels(obj, "spec", "template", "metadata", "labels")
 	case kindService:
 		patchNestedLabels(obj, "spec", "selector")
+	case kindNetworkPolicy:
+		// Upstream operand overlays use `labels: includeSelectors: true`, which
+		// stamps app.kubernetes.io/part-of (e.g. odh-notebook-controller,
+		// kubeflow-workspaces) into BOTH the Deployment selector / pod template
+		// labels and the NetworkPolicy spec.podSelector. The branch above rewrites
+		// that label to part-of=workbenches on the workload, so spec.podSelector
+		// must be rewritten the same way: otherwise the policy applies cleanly but
+		// selects zero pods and enforces nothing (observed on RHOAI 3.6 for
+		// notebook-controller-allow-ports and workspaces-controller-*-allow-ports).
+		// matchExpressions are not rewritten: no upstream operand policy uses them.
+		patchNestedLabels(obj, "spec", "podSelector", "matchLabels")
 	}
 }
 
@@ -684,6 +727,7 @@ var cleanupGVKs = []schema.GroupVersionKind{
 	{Group: "", Version: "v1", Kind: "Secret"},
 	{Group: "", Version: "v1", Kind: kindService},
 	{Group: "", Version: "v1", Kind: "ServiceAccount"},
+	{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "Role"},
 	{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "RoleBinding"},
 }

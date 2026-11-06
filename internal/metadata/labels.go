@@ -24,4 +24,9 @@ const (
 	PartOfLabelKey      = "app.kubernetes.io/part-of"
 	ComponentLabelValue = "workbenches"
 	LabelTrue           = "true"
+
+	// ComponentNameLabelKey identifies which component a rendered object
+	// belongs to; notebook controller deployments are the consumers of the
+	// ingress contract ConfigMap.
+	ComponentNameLabelKey = "component.opendatahub.io/name"
 )

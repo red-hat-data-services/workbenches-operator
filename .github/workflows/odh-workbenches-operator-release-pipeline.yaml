@@ -1,0 +1,333 @@
+name: ODH Workbenches Operator Release Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      new-image-version:
+        description: "NEXT Tekton tag (n+1); must be greater than the current v1.x push tag"
+        required: true
+        type: string
+      allow-sync:
+        description: "Run main → stable → v1.x branch sync before preparing the release"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+env:
+  REPO: ${{ github.repository }}
+  RELEASE_BRANCH: v1.x
+  TEKTON_PUSH_FILE: .tekton/odh-workbenches-operator-push.yaml
+  IMAGE_REF: quay.io/opendatahub/odh-workbenches-operator
+  PARAMS_ENV_FILE: charts/operator/params.env
+  PARAMS_ENV_KEY: workbenches-operator-image
+  VALUES_FILE: charts/operator/values.yaml
+  VALUES_IMAGE_KEY: workbenchesOperatorImage
+
+jobs:
+  validate-input:
+    name: Validate version input
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Validate next image tag
+        env:
+          NEW_VERSION: ${{ inputs.new-image-version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$NEW_VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::Invalid next image tag: $NEW_VERSION"
+            echo "The tag must start with an alphanumeric character or underscore, contain only alphanumeric characters, periods, underscores, or hyphens, and be at most 128 characters."
+            exit 1
+          fi
+
+          echo "Next Tekton image tag validated: $NEW_VERSION"
+
+  sync-main-to-stable:
+    name: Sync main to stable
+    needs: validate-input
+    if: ${{ inputs.allow-sync }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sync-branches.yaml
+    with:
+      source: main
+      target: stable
+      dry_run: false
+
+  sync-stable-to-release:
+    name: Sync stable to v1.x
+    needs: sync-main-to-stable
+    if: ${{ inputs.allow-sync }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sync-branches.yaml
+    with:
+      source: stable
+      target: v1.x
+      dry_run: false
+
+  push-branch:
+    name: Promote image and push release branch
+    needs:
+      - validate-input
+      - sync-stable-to-release
+    if: ${{ always() && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      branch_name: ${{ steps.create-branch.outputs.branch_name }}
+      release_version: ${{ steps.extract-current-tag.outputs.release_version }}
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch latest release branch
+        run: |
+          set -euo pipefail
+          git fetch origin "$RELEASE_BRANCH"
+          git reset --hard "origin/$RELEASE_BRANCH"
+          echo "Checked out $RELEASE_BRANCH at $(git rev-parse HEAD)"
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Extract and validate current Tekton tag
+        id: extract-current-tag
+        env:
+          NEW_VERSION: ${{ inputs.new-image-version }}
+        run: |
+          set -euo pipefail
+
+          ESCAPED_REF="${IMAGE_REF//./\\.}"
+          CURRENT_TAG="$(grep -oP "^[[:space:]]*value:[[:space:]]+${ESCAPED_REF}:\K[A-Za-z0-9_][A-Za-z0-9._-]{0,127}[[:space:]]*$" "$TEKTON_PUSH_FILE" || true)"
+          CURRENT_TAG_COUNT="$(printf '%s\n' "$CURRENT_TAG" | grep -c . || true)"
+
+          if [[ "$CURRENT_TAG_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one output-image tag for $IMAGE_REF in $TEKTON_PUSH_FILE, found $CURRENT_TAG_COUNT"
+            exit 1
+          fi
+
+          CURRENT_TAG="$(printf '%s\n' "$CURRENT_TAG" | head -n1)"
+
+          if [[ "$NEW_VERSION" == "$CURRENT_TAG" ]]; then
+            echo "::error::Next image tag ($NEW_VERSION) must be greater than the current tag ($CURRENT_TAG)"
+            exit 1
+          fi
+
+          HIGHEST_TAG="$(printf '%s\n' "$CURRENT_TAG" "$NEW_VERSION" | sort -V | tail -n1)"
+          if [[ "$HIGHEST_TAG" != "$NEW_VERSION" ]]; then
+            echo "::error::Next image tag ($NEW_VERSION) must be greater than the current tag ($CURRENT_TAG)"
+            exit 1
+          fi
+
+          echo "Current Tekton tag (release version): $CURRENT_TAG"
+          echo "Next Tekton tag: $NEW_VERSION"
+          echo "release_version=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Release Input"
+            echo "- Release version: \`$CURRENT_TAG\`"
+            echo "- Next Tekton version: \`$NEW_VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote current Tekton tag
+        env:
+          RELEASE_VERSION: ${{ steps.extract-current-tag.outputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          ESCAPED_REF="${IMAGE_REF//./\\.}"
+          PARAMS_COUNT="$(grep -cF "${PARAMS_ENV_KEY}=${IMAGE_REF}:" "$PARAMS_ENV_FILE" || true)"
+          if [[ "$PARAMS_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one ${PARAMS_ENV_KEY} entry for $IMAGE_REF in $PARAMS_ENV_FILE, found $PARAMS_COUNT"
+            exit 1
+          fi
+
+          sed -i "s|^${PARAMS_ENV_KEY}=${ESCAPED_REF}:.*|${PARAMS_ENV_KEY}=${IMAGE_REF}:${RELEASE_VERSION}|" "$PARAMS_ENV_FILE"
+          if ! grep -qF "${PARAMS_ENV_KEY}=${IMAGE_REF}:${RELEASE_VERSION}" "$PARAMS_ENV_FILE"; then
+            echo "::error::Failed to promote $IMAGE_REF:$RELEASE_VERSION in $PARAMS_ENV_FILE"
+            exit 1
+          fi
+
+          VALUES_IMAGE_COUNT="$(grep -Ec "^[[:space:]]*${VALUES_IMAGE_KEY}:[[:space:]]+${ESCAPED_REF}:" "$VALUES_FILE" || true)"
+          if [[ "$VALUES_IMAGE_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one ${VALUES_IMAGE_KEY} entry for $IMAGE_REF in $VALUES_FILE, found $VALUES_IMAGE_COUNT"
+            exit 1
+          fi
+
+          sed -i -E "s|^([[:space:]]*${VALUES_IMAGE_KEY}:[[:space:]]+)${ESCAPED_REF}:.*|\1${IMAGE_REF}:${RELEASE_VERSION}|" "$VALUES_FILE"
+          if ! grep -Eq "^[[:space:]]*${VALUES_IMAGE_KEY}:[[:space:]]+${ESCAPED_REF}:${RELEASE_VERSION}[[:space:]]*$" "$VALUES_FILE"; then
+            echo "::error::Failed to promote $IMAGE_REF:$RELEASE_VERSION in $VALUES_FILE"
+            exit 1
+          fi
+
+          VALUES_TAG_COUNT="$(grep -Ec '^[[:space:]]*tag:[[:space:]]+[A-Za-z0-9_][A-Za-z0-9._-]{0,127}[[:space:]]*$' "$VALUES_FILE" || true)"
+          if [[ "$VALUES_TAG_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one image.tag entry in $VALUES_FILE, found $VALUES_TAG_COUNT"
+            exit 1
+          fi
+
+          sed -i -E "s|^([[:space:]]*tag:[[:space:]]+)[A-Za-z0-9_][A-Za-z0-9._-]{0,127}([[:space:]]*)\$|\1${RELEASE_VERSION}\2|" "$VALUES_FILE"
+          if ! grep -Eq "^[[:space:]]*tag:[[:space:]]+${RELEASE_VERSION}[[:space:]]*$" "$VALUES_FILE"; then
+            echo "::error::Failed to promote image.tag to $RELEASE_VERSION in $VALUES_FILE"
+            exit 1
+          fi
+
+          echo "Promoted $IMAGE_REF:$RELEASE_VERSION in $PARAMS_ENV_FILE and $VALUES_FILE"
+
+      - name: Bump Tekton push image
+        env:
+          NEW_VERSION: ${{ inputs.new-image-version }}
+        run: |
+          set -euo pipefail
+
+          ESCAPED_REF="${IMAGE_REF//./\\.}"
+          OUTPUT_IMAGE_COUNT="$(grep -Ec "^[[:space:]]*value:[[:space:]]+${ESCAPED_REF}:" "$TEKTON_PUSH_FILE" || true)"
+          if [[ "$OUTPUT_IMAGE_COUNT" -ne 1 ]]; then
+            echo "::error::Expected exactly one output-image entry for $IMAGE_REF in $TEKTON_PUSH_FILE, found $OUTPUT_IMAGE_COUNT"
+            exit 1
+          fi
+
+          sed -i -E "s|^([[:space:]]*value:[[:space:]]+)${ESCAPED_REF}:.*|\1${IMAGE_REF}:${NEW_VERSION}|" "$TEKTON_PUSH_FILE"
+          if ! grep -Eq "^[[:space:]]*value:[[:space:]]+${ESCAPED_REF}:${NEW_VERSION}[[:space:]]*$" "$TEKTON_PUSH_FILE"; then
+            echo "::error::Failed to set next Tekton image tag to $NEW_VERSION"
+            exit 1
+          fi
+
+          echo "Set next Tekton image tag to $NEW_VERSION"
+
+      - name: Verify Helm image pins
+        run: make chart-verify-params
+
+      - name: Verify release diff
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r changed_file; do
+            case "$changed_file" in
+              "$TEKTON_PUSH_FILE"|"$PARAMS_ENV_FILE"|"$VALUES_FILE")
+                ;;
+              *)
+                echo "::error::Unexpected release file changed: $changed_file"
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only)
+
+          for required_file in "$PARAMS_ENV_FILE" "$TEKTON_PUSH_FILE"; do
+            if git diff --quiet -- "$required_file"; then
+              echo "::error::Expected $required_file to change; the current Tekton tag may already be promoted"
+              exit 1
+            fi
+          done
+
+          echo "=== Release diff ==="
+          git diff
+
+      - name: Create and push release branch
+        id: create-branch
+        env:
+          RELEASE_VERSION: ${{ steps.extract-current-tag.outputs.release_version }}
+          NEW_VERSION: ${{ inputs.new-image-version }}
+        run: |
+          set -euo pipefail
+
+          BRANCH_NAME="release/${RELEASE_VERSION}"
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null; then
+            echo "::error::Release branch $BRANCH_NAME already exists; remove it only after confirming no open PR uses it"
+            exit 1
+          fi
+
+          git checkout -b "$BRANCH_NAME"
+          git add -- "$TEKTON_PUSH_FILE" "$PARAMS_ENV_FILE" "$VALUES_FILE"
+          git commit \
+            -m "chore: release ${RELEASE_VERSION}" \
+            -m "Promote the operator image to ${RELEASE_VERSION} and set the next Tekton tag to ${NEW_VERSION}." \
+            -m "Signed-off-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          git push origin "refs/heads/${BRANCH_NAME}"
+
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+
+  create-pr:
+    name: Create release pull request
+    needs: push-branch
+    if: ${{ always() && needs.push-branch.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pr_url: ${{ steps.create-pr.outputs.pr_url }}
+      pr_number: ${{ steps.create-pr.outputs.pr_number }}
+    steps:
+      - name: Create pull request
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.push-branch.outputs.release_version }}
+          NEW_VERSION: ${{ inputs.new-image-version }}
+          BRANCH_NAME: ${{ needs.push-branch.outputs.branch_name }}
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/workbenches-operator-release-pr.md <<EOF
+          ## Release ${RELEASE_VERSION}
+
+          This pull request promotes the current Tekton build and prepares the next build:
+
+          - Promoted operator image: ${IMAGE_REF}:${RELEASE_VERSION}
+          - Next Tekton image tag: ${NEW_VERSION}
+
+          ### Files updated
+
+          - ${PARAMS_ENV_FILE}
+          - ${VALUES_FILE}
+          - ${TEKTON_PUSH_FILE}
+
+          ### After merge
+
+          Merging this pull request creates GitHub Release ${RELEASE_VERSION} from the promoted runtime image pin.
+          EOF
+
+          PR_URL="$(gh pr create \
+            --repo "$REPO" \
+            --base "$RELEASE_BRANCH" \
+            --head "$BRANCH_NAME" \
+            --title "chore: release ${RELEASE_VERSION}" \
+            --body-file /tmp/workbenches-operator-release-pr.md)"
+          PR_NUMBER="$(gh pr view "$PR_URL" --repo "$REPO" --json number --jq '.number')"
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Created release pull request: $PR_URL"
+
+  summary:
+    name: Release pipeline summary
+    needs: [push-branch, create-pr]
+    if: ${{ always() && needs.create-pr.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Write summary
+        env:
+          PR_URL: ${{ needs.create-pr.outputs.pr_url }}
+          RELEASE_VERSION: ${{ needs.push-branch.outputs.release_version }}
+          NEW_VERSION: ${{ inputs.new-image-version }}
+        run: |
+          {
+            echo "## ODH Workbenches Operator Release Pipeline"
+            echo ""
+            echo "- Release version: \`$RELEASE_VERSION\`"
+            echo "- Next Tekton version: \`$NEW_VERSION\`"
+            echo "- Review pull request: $PR_URL"
+            echo "- Merging the pull request creates GitHub Release \`$RELEASE_VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"

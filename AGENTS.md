@@ -18,7 +18,7 @@ This is a Kubernetes operator (built with Kubebuilder/controller-runtime) that m
 - **Platform version handshake**: Controller watches ConfigMap `odh-workbenches-config` (in the resolved applications namespace) and records the platform version in `status.releases` (see `internal/platformconfig/`).
 - **Operand namespace**: Notebook-controller manifests are applied into the resolved applications namespace (`APPLICATIONS_NAMESPACE` when set and DNS-1123 valid; otherwise `opendatahub` for OpenDataHub / `redhat-ods-applications` for SelfManagedRhoai). The legacy `workbenchNamespace` (or platform default `rhods-notebooks` / `opendatahub`) is ensured separately for Notebook CR placement.
 - **Distribution alignment**: `status.distribution` reports the distribution context (`OpenDataHub`, `SelfManagedRHOAI`, or `Standalone`). Ready is gated on distribution alignment when a platform ConfigMap is present.
-- **OwnerReferences and watches**: Operand resources receive `OwnerReferences` via `SetControllerReference` in `applyObjects()` (skip list: Namespace, CRD, ImageStream). The controller uses `Owns()` watches on ConfigMap, Secret, Service, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, MutatingWebhookConfiguration, ValidatingWebhookConfiguration, and Deployment (with `deploymentAvailabilityChangedPredicate`).
+- **OwnerReferences and watches**: Operand resources receive `OwnerReferences` via `SetControllerReference` in `applyObjects()` (skip list: Namespace, CRD, ImageStream). The controller uses `Owns()` watches on ConfigMap, Secret, Service, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, NetworkPolicy, MutatingWebhookConfiguration, ValidatingWebhookConfiguration, and Deployment (with `deploymentAvailabilityChangedPredicate`).
 - **Component labels**: SSA applies `app.opendatahub.io/workbenches=true` and `app.kubernetes.io/part-of=workbenches` on every object's metadata, and additionally patches `spec.selector.matchLabels`/`spec.template.metadata.labels` on Deployments and `spec.selector` on Services (`setComponentLabels`/`patchNestedLabels` in `manifests.go`).
 - **Status condition sanitization**: Before every status update, `sanitizeConditions()` replaces empty `Reason` fields with `"Unknown"` to avoid API validation errors from foreign conditions.
 - **Managed vs Removed**: `managementState: Removed` cleans up operator-managed resources; deletion uses finalizer `components.platform.opendatahub.io/workbenches-cleanup`.
@@ -46,7 +46,7 @@ chaos/                          operator-chaos knowledge models (profiles/odh, p
 ci/                             Go directive bump + ODH manifest SHA pin helpers
 hack/                           Boilerplate + Helm chart sync/verify scripts
 .github/workflows/              CI (test, build, lint, e2e, govulncheck, disconnected-readiness, operator-chaos, manifests-sync-main/stable, sync-branches, TLS lint, Semgrep)
-renovate.json                   MintMaker: weekly GHA bumps + Go security-only updates
+.github/dependabot.yml          Dependabot: weekly GHA bumps + Go security-only updates
 .pre-commit-config.yaml         pre-commit hooks (golangci-lint skipped in CI; dedicated lint job exists)
 semgrep.yaml                    Semgrep TLS compliance rules
 .gitleaks.toml                  Secret scanning configuration (gitleaks)
@@ -152,7 +152,6 @@ GitHub Actions in `.github/workflows/`:
 - `test.yml` — unit tests + Codecov; separate job for `TestRenderRealManifests`
 - `build.yml` — binary build
 - `lint.yml` — pre-commit, golangci-lint, go vet, go mod verify, kube-linter, helm-lint, chart sync/inventory verify, **verify-manifests** and **verify-generate** (ensure generated code is committed)
-- `renovate-config.yml` — `renovate-config-validator --strict` on PRs that touch `renovate.json` (or this workflow)
 - `e2e.yml` — end-to-end tests on Kind cluster (PRs touching code/Dockerfile)
 - `upgrade.yml` — operator upgrade smoke on Kind (baseline chart and published image, then the current checkout)
 - `govulncheck.yaml` — Go vulnerability scan on push to `main` (also `workflow_dispatch`)
@@ -171,7 +170,7 @@ operator-chaos (`chaos/`):
 - CI validates, preflights (`--local`), diffs knowledge/CRDs vs the PR base, and dry-runs upgrade simulation. There is no `make test-chaos` target.
 - workbenches-v2 / workspaces-controller is not in the knowledge model yet (optional, default `Removed`).
 
-MintMaker (`renovate.json`): weekly GitHub Actions version bumps + Go module security-only updates (PRs from `red-hat-konflux[bot]`). Takes effect when MintMaker is enabled on the Konflux component. Do not also enable Dependabot for the same ecosystems.
+Dependabot (`.github/dependabot.yml`): weekly GitHub Actions version bumps + Go module security-only updates. Go security PRs also require Dependabot security updates in the repository settings. Do not also enable MintMaker for the same ecosystems.
 
 Konflux builds: `.tekton/` PipelineRuns for push and pull request.
 

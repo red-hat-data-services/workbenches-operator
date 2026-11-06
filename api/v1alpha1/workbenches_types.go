@@ -66,6 +66,17 @@ type Ingress struct {
 	IsDefault bool `json:"isDefault,omitempty"`
 }
 
+// ODHNotebookControllerProbeSpec configures workbench liveness and readiness probes.
+type ODHNotebookControllerProbeSpec struct {
+	// timeoutSeconds is the timeout in seconds enforced on existing liveness and readiness
+	// probes of the main workbench container and its injected kube-rbac-proxy sidecar.
+	// Startup probes and other probe settings are not changed.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2147483647
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+}
+
 // WorkbenchesSpec defines the desired state of Workbenches.
 type WorkbenchesSpec struct {
 	// managementState indicates whether this component should be managed by the operator.
@@ -114,6 +125,11 @@ type WorkbenchesSpec struct {
 	// mlflowEnabled indicates whether the MLflow integration is active.
 	// Projected by the orchestrator from DSC MLflowOperator state.
 	MLflowEnabled bool `json:"mlflowEnabled,omitempty"`
+
+	// odhNotebookControllerProbe configures the notebook controller workbench probe policy.
+	// When omitted, the notebook controller enforces the Kubernetes default timeout of 1 second.
+	// +optional
+	ODHNotebookControllerProbe *ODHNotebookControllerProbeSpec `json:"odhNotebookControllerProbe,omitempty"`
 
 	// workbenchesV2 configures the workbenches-v2 submodule.
 	// When omitted, workbenches-v2 is not deployed (equivalent to managementState: Removed).

@@ -230,11 +230,29 @@ ensure_openshift_cluster() {
 	echo "[openshift] using the current kube context"
 }
 
+# Repository without a tag or digest. A registry port is kept:
+# localhost:5000/name:tag -> localhost:5000/name.
+image_repository() {
+	local image="$1"
+	local without_digest="${image%@sha256:*}"
+	local name="${without_digest##*/}"
+	if [[ "${name}" == *:* ]]; then
+		echo "${without_digest%:*}"
+		return
+	fi
+	echo "${without_digest}"
+}
+
 repo_digest() {
 	local image="$1"
-	local digest
-	digest="$("${CONTAINER_ENGINE}" image inspect --format '{{index .RepoDigests 0}}' "${image}" 2>/dev/null || true)"
-	[[ -n "${digest}" && "${digest}" != "<no value>" ]] || die "image ${image} has no repo digest"
+	local repository digest line
+	repository="$(image_repository "${image}")"
+	while IFS= read -r line; do
+		[[ "${line}" == "${repository}@sha256:"* ]] || continue
+		digest="${line}"
+		break
+	done < <("${CONTAINER_ENGINE}" image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${image}" 2>/dev/null || true)
+	[[ -n "${digest}" ]] || die "image ${image} has no repo digest for ${repository}"
 	echo "${digest}"
 }
 

@@ -27,6 +27,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -162,6 +163,7 @@ func (r *WorkbenchesReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&rbacv1.ClusterRole{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&admissionregistrationv1.MutatingWebhookConfiguration{}).
 		Owns(&admissionregistrationv1.ValidatingWebhookConfiguration{}).
 		// Deployments also need status (replica) updates, not only generation changes.
@@ -307,8 +309,15 @@ func (deploymentAvailabilityChangedPredicate) Update(e event.UpdateEvent) bool {
 	oldDesired := deploymentDesiredReplicas(oldDeploy)
 	newDesired := deploymentDesiredReplicas(newDeploy)
 
+	// Rollout evidence evaluates ObservedGeneration, UpdatedReplicas and
+	// total Replicas in addition to availability, so those transitions must
+	// also requeue (e.g. the final rollout update that only bumps
+	// ObservedGeneration).
 	return oldDeploy.Status.ReadyReplicas != newDeploy.Status.ReadyReplicas ||
 		oldDeploy.Status.AvailableReplicas != newDeploy.Status.AvailableReplicas ||
+		oldDeploy.Status.ObservedGeneration != newDeploy.Status.ObservedGeneration ||
+		oldDeploy.Status.UpdatedReplicas != newDeploy.Status.UpdatedReplicas ||
+		oldDeploy.Status.Replicas != newDeploy.Status.Replicas ||
 		oldDesired != newDesired
 }
 
@@ -436,7 +445,7 @@ func (r *WorkbenchesReconciler) reconcileManaged(ctx context.Context, wb *compon
 		}
 
 		// Requeue immediately to continue provisioning after the first Pending status write.
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 	}
 
 	// Resolve and record namespaces early so error paths still persist them.
@@ -850,6 +859,10 @@ func (r *WorkbenchesReconciler) ensureGeneratedNamespace(
 }
 
 func validateSpec(spec componentsv1alpha1.WorkbenchesSpec) error {
+	if spec.ODHNotebookControllerProbe != nil && spec.ODHNotebookControllerProbe.TimeoutSeconds < 1 {
+		return fmt.Errorf("odhNotebookControllerProbe.timeoutSeconds must be at least 1 second, got %d", spec.ODHNotebookControllerProbe.TimeoutSeconds)
+	}
+
 	if spec.Platform != "" && !platform.IsValid(spec.Platform) {
 		return fmt.Errorf("unsupported platform %q, must be one of: %s, %s",
 			spec.Platform, platform.OpenDataHub, platform.SelfManagedRhoai)

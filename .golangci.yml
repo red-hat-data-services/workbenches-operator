@@ -21,6 +21,7 @@ linters:
     - depguard
     - gomodguard
     - exhaustruct
+    - exhaustruct_v5
     - funlen
     - gochecknoglobals
     - gochecknoinits
