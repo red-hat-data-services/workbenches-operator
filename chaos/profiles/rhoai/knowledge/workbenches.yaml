@@ -316,18 +316,6 @@ components:
           opendatahub.io/notebook-image: "true"
       - apiVersion: image.openshift.io/v1
         kind: ImageStream
-        name: runtime-rocm-pytorch
-        namespace: redhat-ods-applications
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
-        name: runtime-rocm-tensorflow
-        namespace: redhat-ods-applications
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
         name: runtime-tensorflow
         namespace: redhat-ods-applications
         labels:
@@ -359,18 +347,6 @@ components:
       - apiVersion: image.openshift.io/v1
         kind: ImageStream
         name: runtime-pytorch-llmcompressor-2025-2
-        namespace: redhat-ods-applications
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
-        name: runtime-rocm-pytorch-2025-2
-        namespace: redhat-ods-applications
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
-        name: runtime-rocm-tensorflow-2025-2
         namespace: redhat-ods-applications
         labels:
           opendatahub.io/notebook-image: "true"
