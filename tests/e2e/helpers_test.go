@@ -160,6 +160,23 @@ func newNotebook(name string, annotations map[string]string) *unstructured.Unstr
 	return nb
 }
 
+// updateNotebook re-fetches the Notebook and applies the mutator, retrying on
+// conflicts with the notebook-controller's concurrent status updates.
+func updateNotebook(name string, mutate func(*unstructured.Unstructured)) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		nb := &unstructured.Unstructured{}
+		nb.SetGroupVersionKind(notebookGVK())
+		g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name:      name,
+			Namespace: webhookTestNamespace,
+		}, nb)).To(Succeed())
+
+		mutate(nb)
+
+		g.Expect(k8sClient.Update(ctx, nb)).To(Succeed())
+	}, 30*time.Second, 1*time.Second).Should(Succeed())
+}
+
 func notebookGVK() schema.GroupVersionKind {
 	return gvk.Notebook
 }

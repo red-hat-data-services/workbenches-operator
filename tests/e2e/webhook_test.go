@@ -535,18 +535,11 @@ func registerProfileSwitchTests() {
 		})
 
 		It("Should replace scheduling when switching to second profile", func() {
-			existing := &unstructured.Unstructured{}
-			existing.SetGroupVersionKind(notebookGVK())
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name:      switchNotebook,
-				Namespace: webhookTestNamespace,
-			}, existing)).To(Succeed())
-
-			annotations := existing.GetAnnotations()
-			annotations["opendatahub.io/hardware-profile-name"] = switchHWP2
-			existing.SetAnnotations(annotations)
-
-			Expect(k8sClient.Update(ctx, existing)).To(Succeed())
+			updateNotebook(switchNotebook, func(existing *unstructured.Unstructured) {
+				annotations := existing.GetAnnotations()
+				annotations["opendatahub.io/hardware-profile-name"] = switchHWP2
+				existing.SetAnnotations(annotations)
+			})
 
 			updated := &unstructured.Unstructured{}
 			updated.SetGroupVersionKind(notebookGVK())
@@ -629,19 +622,12 @@ func registerProfileRemovalTests() {
 		})
 
 		It("Should remove scheduling settings when HWP annotation is removed", func() {
-			existing := &unstructured.Unstructured{}
-			existing.SetGroupVersionKind(notebookGVK())
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name:      removalNotebook,
-				Namespace: webhookTestNamespace,
-			}, existing)).To(Succeed())
-
 			// Remove the HWP name annotation (keep namespace so removal logic triggers)
-			annotations := existing.GetAnnotations()
-			delete(annotations, "opendatahub.io/hardware-profile-name")
-			existing.SetAnnotations(annotations)
-
-			Expect(k8sClient.Update(ctx, existing)).To(Succeed())
+			updateNotebook(removalNotebook, func(existing *unstructured.Unstructured) {
+				annotations := existing.GetAnnotations()
+				delete(annotations, "opendatahub.io/hardware-profile-name")
+				existing.SetAnnotations(annotations)
+			})
 
 			updated := &unstructured.Unstructured{}
 			updated.SetGroupVersionKind(notebookGVK())
