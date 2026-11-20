@@ -314,18 +314,6 @@ components:
           opendatahub.io/notebook-image: "true"
       - apiVersion: image.openshift.io/v1
         kind: ImageStream
-        name: runtime-rocm-pytorch
-        namespace: opendatahub
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
-        name: runtime-rocm-tensorflow
-        namespace: opendatahub
-        labels:
-          opendatahub.io/notebook-image: "true"
-      - apiVersion: image.openshift.io/v1
-        kind: ImageStream
         name: runtime-tensorflow
         namespace: opendatahub
         labels:
