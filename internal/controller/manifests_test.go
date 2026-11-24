@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -1515,6 +1517,248 @@ func TestRenderRealManifests(t *testing.T) {
 
 						t.Logf("rendered %d objects", len(objects))
 					})
+				}
+			})
+		}
+	}
+}
+
+// applyVerbs are authorized by server-side apply. Creating a missing object is
+// a create, and an existing object is a patch. SSA does not require update.
+var applyVerbs = []string{"create", "patch"}
+
+// cleanupVerbs are authorized by gcOrphanedResources, which lists and deletes
+// only the kinds in cleanupGVKs and cleanupClusterGVKs.
+var cleanupVerbs = []string{"list", "delete"}
+
+// clusterRoleGrants is the operator ClusterRole collapsed to "does any rule
+// allow this group, resource, and verb". Name-restricted rules are ignored:
+// they cannot authorize an arbitrary operand object.
+type clusterRoleGrants struct {
+	rules []rbacv1.PolicyRule
+}
+
+func (g clusterRoleGrants) allows(apiGroup, resource, verb string) bool {
+	for _, rule := range g.rules {
+		if len(rule.ResourceNames) > 0 {
+			continue
+		}
+
+		if !ruleMatches(rule.APIGroups, apiGroup) || !ruleMatches(rule.Resources, resource) || !ruleMatches(rule.Verbs, verb) {
+			continue
+		}
+
+		return true
+	}
+
+	return false
+}
+
+func ruleMatches(values []string, want string) bool {
+	for _, value := range values {
+		if value == "*" || value == want {
+			return true
+		}
+	}
+
+	return false
+}
+
+// resourceNameForKind maps a manifest kind to the RBAC resource name the same
+// way client-go does when no RESTMapper is available. NetworkPolicy becomes
+// networkpolicies; core kinds use the empty API group.
+func resourceNameForKind(gvk schema.GroupVersionKind) string {
+	plural, _ := meta.UnsafeGuessKindToResource(gvk)
+
+	return plural.Resource
+}
+
+func loadManagerClusterRole(t *testing.T) *rbacv1.ClusterRole {
+	t.Helper()
+
+	path := filepath.Join("..", "..", "config", "rbac", "role.yaml")
+
+	raw, err := os.ReadFile(path) //nolint:gosec // test reads the committed ClusterRole from a fixed repo path
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	role := &rbacv1.ClusterRole{}
+	if err := sigyaml.Unmarshal(raw, role); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	if len(role.Rules) == 0 {
+		t.Fatalf("parse %s: no rules", path)
+	}
+
+	return role
+}
+
+func TestClusterRoleGrantAllows(t *testing.T) {
+	grants := clusterRoleGrants{rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"create", "patch"}},
+		{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"*"}, Verbs: []string{"create", "patch", "list", "delete"}},
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"*"}, ResourceNames: []string{"only-this"}},
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"create", "patch"}},
+	}}
+
+	tests := []struct {
+		apiGroup string
+		resource string
+		verb     string
+		want     bool
+	}{
+		{apiGroup: "", resource: "configmaps", verb: "patch", want: true},
+		{apiGroup: "", resource: "configmaps", verb: "delete", want: false},
+		{apiGroup: "networking.k8s.io", resource: "networkpolicies", verb: "create", want: true},
+		{apiGroup: "apps", resource: "deployments", verb: "delete", want: false},
+		{apiGroup: "apps", resource: "deployments", verb: "patch", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.apiGroup+"/"+tt.resource+"/"+tt.verb, func(t *testing.T) {
+			if got := grants.allows(tt.apiGroup, tt.resource, tt.verb); got != tt.want {
+				t.Fatalf("allows() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	known := map[schema.GroupVersionKind]string{
+		{Group: "", Version: "v1", Kind: "ServiceAccount"}:                                             "serviceaccounts",
+		{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}:                             "networkpolicies",
+		{Group: "image.openshift.io", Version: "v1", Kind: "ImageStream"}:                              "imagestreams",
+		{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}:               "customresourcedefinitions",
+		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfiguration"}:   "mutatingwebhookconfigurations",
+		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration"}: "validatingwebhookconfigurations",
+		{Group: "kubeflow.org", Version: "v1beta1", Kind: "WorkspaceKind"}:                             "workspacekinds",
+	}
+
+	for gvk, want := range known {
+		if got := resourceNameForKind(gvk); got != want {
+			t.Errorf("resourceNameForKind(%s) = %q, want %q", gvk.Kind, got, want)
+		}
+	}
+}
+
+// TestRenderedManifestsAreCoveredByClusterRole fails when a fetched operand
+// manifest introduces a kind the operator ClusterRole cannot apply, or when a
+// cleanup kind cannot be listed and deleted. Manifest sync commits opt/manifests
+// without regenerating config/rbac/role.yaml. The Helm chart is copied from that
+// file, so a gap here is the gap that reaches the cluster.
+func TestRenderedManifestsAreCoveredByClusterRole(t *testing.T) {
+	role := loadManagerClusterRole(t)
+	grants := clusterRoleGrants{rules: role.Rules}
+
+	for _, gvk := range append(append([]schema.GroupVersionKind{}, cleanupGVKs...), cleanupClusterGVKs...) {
+		resource := resourceNameForKind(gvk)
+		if resource == "" {
+			t.Errorf("cleanup kind %s has no RBAC resource name", gvk.Kind)
+
+			continue
+		}
+
+		for _, verb := range cleanupVerbs {
+			if grants.allows(gvk.Group, resource, verb) {
+				continue
+			}
+
+			t.Errorf("cleanup %s (%s/%s) missing %s", gvk.Kind, gvk.Group, resource, verb)
+		}
+	}
+
+	repoRoot := filepath.Join("..", "..")
+	basePath := filepath.Join(repoRoot, "opt", "manifests")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		t.Fatalf("opt/manifests not found — run 'make manifests-fetch' and commit the result")
+	}
+
+	platforms := []string{
+		platform.OpenDataHub,
+		platform.SelfManagedRhoai,
+		"",
+	}
+
+	params := map[string]string{
+		paramSectionTitle:  "Test",
+		paramMLflowEnabled: "false",
+		paramGatewayURL:    "",
+	}
+
+	for _, p := range platforms {
+		name := p
+		if name == "" {
+			name = "empty"
+		}
+
+		for _, v2Managed := range []bool{false, true} {
+			testName := name
+			if v2Managed {
+				testName += "-workbenchesV2Managed"
+			}
+
+			t.Run(testName, func(t *testing.T) {
+				groups := manifestGroupsForPlatform(p, v2Managed)
+				workDir := t.TempDir()
+
+				if err := copyDir(filepath.Join(basePath, "workbenches"), filepath.Join(workDir, "workbenches")); err != nil {
+					t.Fatalf("copyDir() failed: %v", err)
+				}
+
+				var missing []string
+
+				for _, group := range groups {
+					srcDir := filepath.Join(basePath, group)
+					if _, statErr := os.Stat(srcDir); os.IsNotExist(statErr) {
+						t.Fatalf("manifest group directory does not exist: %s", srcDir)
+					}
+
+					renderDir := filepath.Join(workDir, group)
+					if !strings.Contains(group, "workspacekinds/") {
+						if err := patchKustomizeNamespace(renderDir, platform.DefaultApplicationsNamespace(p), logr.Discard()); err != nil {
+							t.Fatalf("patchKustomizeNamespace(%s) failed: %v", group, err)
+						}
+					}
+
+					objects, err := renderKustomize(renderDir, params)
+					if err != nil {
+						t.Fatalf("renderKustomize(%s) failed: %v", group, err)
+					}
+
+					seen := map[schema.GroupVersionKind]struct{}{}
+
+					for _, obj := range prepareRenderedObjects(objects) {
+						gvk := obj.GroupVersionKind()
+						if gvk.Kind == "" || gvk.Kind == "List" {
+							continue
+						}
+
+						if _, already := seen[gvk]; already {
+							continue
+						}
+
+						seen[gvk] = struct{}{}
+
+						resource := resourceNameForKind(gvk)
+						if resource == "" {
+							missing = append(missing, fmt.Sprintf("%s: %s has no RBAC resource name", group, gvk.Kind))
+
+							continue
+						}
+
+						for _, verb := range applyVerbs {
+							if grants.allows(gvk.Group, resource, verb) {
+								continue
+							}
+
+							missing = append(missing, fmt.Sprintf("%s: %s (%s/%s) missing %s", group, gvk.Kind, gvk.Group, resource, verb))
+						}
+					}
+				}
+
+				if len(missing) > 0 {
+					t.Errorf("ClusterRole %s does not cover rendered manifests:\n%s", role.Name, strings.Join(missing, "\n"))
 				}
 			})
 		}

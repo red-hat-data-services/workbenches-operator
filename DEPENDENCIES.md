@@ -145,7 +145,9 @@ operator-owned tree is left in place. Tracked as RHOAIENG-95169.
 Git refs (branch, tag, or `branch@sha`) are **per operator branch** in
 `opt/manifest-sources.sh` — for example `main` on `main`, `stable@<sha>` on
 `stable`, and version tags on `v1.x`. Downstream forks may use different orgs
-and refs.
+and refs. On operator `stable`, `workbenches/notebooks` tracks
+`opendatahub-io/notebooks` `main@<sha>` because that repository's `stable`
+branch is no longer updated. The other ODH operands stay on `stable@<sha>`.
 
 | Target | Source Repository | Source Path |
 |--------|-------------------|-------------|

@@ -64,4 +64,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Validate manifest rendering
-        run: go test ./internal/controller/ -run TestRenderRealManifests -v -count=1
+        run: go test ./internal/controller/ -run 'TestRenderRealManifests|TestRenderedManifestsAreCoveredByClusterRole' -v -count=1
