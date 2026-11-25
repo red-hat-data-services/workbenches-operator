@@ -149,8 +149,24 @@ spec:
     options:
       imageConfig:
         spawner:
-          default: "s2i-minimal-notebook:3.6"
+          default: "s2i-minimal-notebook:3.7"
         values:
+          ## Jupyter | Minimal | CPU | Python 3.12 (3.7)
+          ## ImageStream s2i-minimal-notebook:3.7
+          - id: "s2i-minimal-notebook:3.7"
+            spawner:
+              displayName: "Jupyter | Minimal | CPU | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
           ## Jupyter | Minimal | CPU | Python 3.12 (3.6)
           ## ImageStream s2i-minimal-notebook:3.6
           - id: "s2i-minimal-notebook:3.6"
@@ -160,8 +176,15 @@ spec:
               labels:
                 - key: "python_version"
                   value: "v3.12"
+            redirect:
+              to: "s2i-minimal-notebook:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-minimal-notebook:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -177,12 +200,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "s2i-minimal-notebook:3.6"
+              to: "s2i-minimal-notebook:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-minimal-notebook:3.6 when convenient.
+                  Update to s2i-minimal-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -201,12 +224,12 @@ spec:
                   value: "v3.12"
               hidden: true
             redirect:
-              to: "s2i-minimal-notebook:3.6"
+              to: "s2i-minimal-notebook:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-minimal-notebook:3.6 when convenient.
+                  Update to s2i-minimal-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -224,12 +247,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "s2i-minimal-notebook:3.6"
+              to: "s2i-minimal-notebook:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-minimal-notebook:3.6 when convenient.
+                  Update to s2i-minimal-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cpu-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -248,14 +271,32 @@ spec:
                   value: "v3.11"
               hidden: true
             redirect:
-              to: "s2i-minimal-notebook:3.6"
+              to: "s2i-minimal-notebook:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-minimal-notebook:3.6 when convenient.
+                  Update to s2i-minimal-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | CUDA | Python 3.12 (3.7)
+          ## ImageStream minimal-gpu:3.7
+          - id: "minimal-gpu:3.7"
+            spawner:
+              displayName: "Jupyter | Minimal | CUDA | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with GPU support and minimal dependency set to start experimenting with Jupyter environment."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-n_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -272,8 +313,15 @@ spec:
                   value: "13.0"
                 - key: "python_version"
                   value: "v3.12"
+            redirect:
+              to: "minimal-gpu:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to minimal-gpu:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -291,12 +339,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "minimal-gpu:3.6"
+              to: "minimal-gpu:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to minimal-gpu:3.6 when convenient.
+                  Update to minimal-gpu:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -317,12 +365,12 @@ spec:
                   value: "v3.12"
               hidden: true
             redirect:
-              to: "minimal-gpu:3.6"
+              to: "minimal-gpu:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to minimal-gpu:3.6 when convenient.
+                  Update to minimal-gpu:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -342,12 +390,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "minimal-gpu:3.6"
+              to: "minimal-gpu:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to minimal-gpu:3.6 when convenient.
+                  Update to minimal-gpu:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cuda-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -368,14 +416,32 @@ spec:
                   value: "v3.11"
               hidden: true
             redirect:
-              to: "minimal-gpu:3.6"
+              to: "minimal-gpu:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to minimal-gpu:3.6 when convenient.
+                  Update to minimal-gpu:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-cuda-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Minimal | ROCm | Python 3.12 (3.7)
+          ## ImageStream jupyter-rocm-minimal:3.7
+          - id: "jupyter-rocm-minimal:3.7"
+            spawner:
+              displayName: "Jupyter | Minimal | ROCm | Python 3.12 (3.7)"
+              description: "Jupyter ROCm notebook image for ODH notebooks."
+              labels:
+                - key: "rocm_version"
+                  value: "7.14"
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-n_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -392,8 +458,15 @@ spec:
                   value: "7.14"
                 - key: "python_version"
                   value: "v3.12"
+            redirect:
+              to: "jupyter-rocm-minimal:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-rocm-minimal:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -411,12 +484,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "jupyter-rocm-minimal:3.6"
+              to: "jupyter-rocm-minimal:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-rocm-minimal:3.6 when convenient.
+                  Update to jupyter-rocm-minimal:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -437,12 +510,12 @@ spec:
                   value: "v3.12"
               hidden: true
             redirect:
-              to: "jupyter-rocm-minimal:3.6"
+              to: "jupyter-rocm-minimal:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-rocm-minimal:3.6 when convenient.
+                  Update to jupyter-rocm-minimal:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -462,12 +535,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "jupyter-rocm-minimal:3.6"
+              to: "jupyter-rocm-minimal:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-rocm-minimal:3.6 when convenient.
+                  Update to jupyter-rocm-minimal:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-rocm-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -488,14 +561,30 @@ spec:
                   value: "v3.11"
               hidden: true
             redirect:
-              to: "jupyter-rocm-minimal:3.6"
+              to: "jupyter-rocm-minimal:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-rocm-minimal:3.6 when convenient.
+                  Update to jupyter-rocm-minimal:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-minimal-rocm-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | Data Science | CPU | Python 3.12 (3.7)
+          ## ImageStream s2i-generic-data-science-notebook:3.7
+          - id: "s2i-generic-data-science-notebook:3.7"
+            spawner:
+              displayName: "Jupyter | Data Science | CPU | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with a set of data science libraries that advanced AI/ML notebooks will use as a base image to provide a standard for libraries avialable in all notebooks"
+              labels:
+                - key: "python_version"
+                  value: "v3.12"
+            spec:
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-n_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -510,8 +599,15 @@ spec:
               labels:
                 - key: "python_version"
                   value: "v3.12"
+            redirect:
+              to: "s2i-generic-data-science-notebook:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to s2i-generic-data-science-notebook:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -527,12 +623,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "s2i-generic-data-science-notebook:3.6"
+              to: "s2i-generic-data-science-notebook:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+                  Update to s2i-generic-data-science-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -551,12 +647,12 @@ spec:
                   value: "v3.12"
               hidden: true
             redirect:
-              to: "s2i-generic-data-science-notebook:3.6"
+              to: "s2i-generic-data-science-notebook:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+                  Update to s2i-generic-data-science-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -574,12 +670,12 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             redirect:
-              to: "s2i-generic-data-science-notebook:3.6"
+              to: "s2i-generic-data-science-notebook:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+                  Update to s2i-generic-data-science-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-datascience-cpu-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -598,14 +694,34 @@ spec:
                   value: "v3.11"
               hidden: true
             redirect:
-              to: "s2i-generic-data-science-notebook:3.6"
+              to: "s2i-generic-data-science-notebook:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to s2i-generic-data-science-notebook:3.6 when convenient.
+                  Update to s2i-generic-data-science-notebook:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-datascience-cpu-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch | CUDA | Python 3.12 (3.7)
+          ## ImageStream pytorch:3.7
+          - id: "pytorch:3.7"
+            spawner:
+              displayName: "Jupyter | PyTorch | CUDA | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with PyTorch libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.13"
+            spec:
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-n_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -623,9 +739,16 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
                 - key: "pytorch_version"
-                  value: "2.11"
+                  value: "2.13"
+            redirect:
+              to: "pytorch:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to pytorch:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -645,12 +768,12 @@ spec:
                 - key: "pytorch_version"
                   value: "2.11"
             redirect:
-              to: "pytorch:3.6"
+              to: "pytorch:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to pytorch:3.6 when convenient.
+                  Update to pytorch:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -673,12 +796,12 @@ spec:
                   value: "2.10"
               hidden: true
             redirect:
-              to: "pytorch:3.6"
+              to: "pytorch:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to pytorch:3.6 when convenient.
+                  Update to pytorch:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -700,12 +823,12 @@ spec:
                 - key: "pytorch_version"
                   value: "2.7"
             redirect:
-              to: "pytorch:3.6"
+              to: "pytorch:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to pytorch:3.6 when convenient.
+                  Update to pytorch:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-cuda-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -728,14 +851,36 @@ spec:
                   value: "2.6"
               hidden: true
             redirect:
-              to: "pytorch:3.6"
+              to: "pytorch:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to pytorch:3.6 when convenient.
+                  Update to pytorch:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-cuda-py311-ubi9-2025-1_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
+          ## Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.7)
+          ## ImageStream jupyter-pytorch-llmcompressor:3.7
+          - id: "jupyter-pytorch-llmcompressor:3.7"
+            spawner:
+              displayName: "Jupyter | PyTorch LLM Compressor | CUDA | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with PyTorch LLM Compressor libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "13.0"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "pytorch_version"
+                  value: "2.13"
+                - key: "llm_compressor_version"
+                  value: "0.14"
+            spec:
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -753,11 +898,18 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
                 - key: "pytorch_version"
-                  value: "2.11"
+                  value: "2.13"
                 - key: "llm_compressor_version"
                   value: "0.13"
+            redirect:
+              to: "jupyter-pytorch-llmcompressor:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to jupyter-pytorch-llmcompressor:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -779,12 +931,12 @@ spec:
                 - key: "llm_compressor_version"
                   value: "0.12"
             redirect:
-              to: "jupyter-pytorch-llmcompressor:3.6"
+              to: "jupyter-pytorch-llmcompressor:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+                  Update to jupyter-pytorch-llmcompressor:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -809,12 +961,12 @@ spec:
                   value: "0.10"
               hidden: true
             redirect:
-              to: "jupyter-pytorch-llmcompressor:3.6"
+              to: "jupyter-pytorch-llmcompressor:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+                  Update to jupyter-pytorch-llmcompressor:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -838,12 +990,12 @@ spec:
                 - key: "llm_compressor_version"
                   value: "0.9"
             redirect:
-              to: "jupyter-pytorch-llmcompressor:3.6"
+              to: "jupyter-pytorch-llmcompressor:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to jupyter-pytorch-llmcompressor:3.6 when convenient.
+                  Update to jupyter-pytorch-llmcompressor:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -865,7 +1017,7 @@ spec:
                 - key: "pytorch_version"
                   value: "2.11"
             spec:
-              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-pytorch-rocm-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -981,6 +1133,26 @@ spec:
                 - id: "jupyterlab"
                   port: 8888
 
+          ## Jupyter | TensorFlow | CUDA | Python 3.12 (3.7)
+          ## ImageStream tensorflow:3.7
+          - id: "tensorflow:3.7"
+            spawner:
+              displayName: "Jupyter | TensorFlow | CUDA | Python 3.12 (3.7)"
+              description: "Jupyter notebook image with TensorFlow libraries and dependencies to start experimenting with advanced AI/ML notebooks."
+              labels:
+                - key: "cuda_version"
+                  value: "12.9"
+                - key: "python_version"
+                  value: "v3.12"
+                - key: "tensorflow_version"
+                  value: "2.21"
+            spec:
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-n_PLACEHOLDER"
+              imagePullPolicy: "Always"
+              ports:
+                - id: "jupyterlab"
+                  port: 8888
+
           ## Jupyter | TensorFlow | CUDA | Python 3.12 (3.6)
           ## ImageStream tensorflow:3.6
           - id: "tensorflow:3.6"
@@ -994,8 +1166,15 @@ spec:
                   value: "v3.12"
                 - key: "tensorflow_version"
                   value: "2.21"
+            redirect:
+              to: "tensorflow:3.7"
+              message:
+                level: "Info"
+                text: >
+                  A newer version of this workbench image is available.
+                  Update to tensorflow:3.7 when convenient.
             spec:
-              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -1015,12 +1194,12 @@ spec:
                 - key: "tensorflow_version"
                   value: "2.21"
             redirect:
-              to: "tensorflow:3.6"
+              to: "tensorflow:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to tensorflow:3.6 when convenient.
+                  Update to tensorflow:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-5_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -1043,12 +1222,12 @@ spec:
                   value: "2.21"
               hidden: true
             redirect:
-              to: "tensorflow:3.6"
+              to: "tensorflow:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to tensorflow:3.6 when convenient.
+                  Update to tensorflow:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-3-4_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -1070,12 +1249,12 @@ spec:
                 - key: "tensorflow_version"
                   value: "2.20"
             redirect:
-              to: "tensorflow:3.6"
+              to: "tensorflow:3.7"
               message:
                 level: "Info"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to tensorflow:3.6 when convenient.
+                  Update to tensorflow:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-2025-2_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -1098,12 +1277,12 @@ spec:
                   value: "2.18"
               hidden: true
             redirect:
-              to: "tensorflow:3.6"
+              to: "tensorflow:3.7"
               message:
                 level: "Warning"
                 text: >
                   A newer version of this workbench image is available.
-                  Update to tensorflow:3.6 when convenient.
+                  Update to tensorflow:3.7 when convenient.
             spec:
               image: "odh-workbench-jupyter-tensorflow-cuda-py311-ubi9-2025-1_PLACEHOLDER"
               imagePullPolicy: "Always"
@@ -1125,7 +1304,7 @@ spec:
                 - key: "tensorflow_version"
                   value: "2.20"
             spec:
-              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
@@ -1251,7 +1430,7 @@ spec:
                 - key: "python_version"
                   value: "v3.12"
             spec:
-              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-n_PLACEHOLDER"
+              image: "odh-workbench-jupyter-trustyai-cpu-py312-ubi9-3-6_PLACEHOLDER"
               imagePullPolicy: "Always"
               ports:
                 - id: "jupyterlab"
