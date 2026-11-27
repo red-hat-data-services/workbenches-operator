@@ -1,5 +1,6 @@
 ## Stage 1: Build the manager binary
-FROM registry.redhat.io/ubi9/go-toolset@sha256:23c7cb17e9c53a65f9ab01f2edf1a4e07c9a9dc2258ed63d69e06925e7cea381 AS builder
+# UBI 10 — RHEL 10 has PQC crypto by default (no ubi-minimal-pqc / crypto-policies step).
+FROM registry.access.redhat.com/ubi10/go-toolset@sha256:e94c38ff4a099b755af60c73ac87198c613f369eb7f818d45c96fbc3f21047de AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -17,7 +18,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -tags strictfipsruntime -a -ldflags="-s -w" -o manager cmd/main.go
 
 ## Stage 2: Runtime
-FROM registry.redhat.io/ubi9/ubi-minimal-pqc:9.8@sha256:d638f3b49b79575329aacdae2739f954effe2467c12147711e73445c4fc97819
+FROM registry.access.redhat.com/ubi10/ubi-minimal@sha256:f0c7b9ae9914fcf183e7c36fc46864903c2d2caf3af327421913ae54b3d29e94
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
