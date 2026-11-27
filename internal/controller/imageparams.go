@@ -65,10 +65,7 @@ var imageParamMap = map[string]string{
 	"odh-workbench-jupyter-minimal-cuda-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_CUDA_PY312_IMAGE",
 	"odh-workbench-jupyter-minimal-rocm-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_MINIMAL_ROCM_PY312_IMAGE",
 	"odh-workbench-jupyter-pytorch-cuda-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_PYTORCH_CUDA_PY312_IMAGE",
-	"odh-workbench-jupyter-pytorch-rocm-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_PYTORCH_ROCM_PY312_IMAGE",
 	"odh-workbench-jupyter-tensorflow-cuda-py312-ubi9-n":            "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_TENSORFLOW_CUDA_PY312_IMAGE",
-	"odh-workbench-jupyter-tensorflow-rocm-py312-ubi9-n":            "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_TENSORFLOW_ROCM_PY312_IMAGE",
-	"odh-workbench-jupyter-trustyai-cpu-py312-ubi9-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_TRUSTYAI_CPU_PY312_IMAGE",
 	"odh-workbench-jupyter-pytorch-llmcompressor-cuda-py312-ubi9-n": "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_PYTORCH_LLMCOMPRESSOR_CUDA_PY312_IMAGE",
 	"odh-workbench-jupyter-universal-cpu-py312-c9s-n":               "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_UNIVERSAL_CPU_PY312_C9S_IMAGE",
 	"odh-workbench-jupyter-universal-cpu-py312-ubi9-n":              "RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_UNIVERSAL_CPU_PY312_IMAGE",
@@ -78,9 +75,7 @@ var imageParamMap = map[string]string{
 	"odh-pipeline-runtime-datascience-cpu-py312-ubi9-n":            "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_DATASCIENCE_CPU_PY312_IMAGE",
 	"odh-pipeline-runtime-minimal-cpu-py312-ubi9-n":                "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_MINIMAL_CPU_PY312_IMAGE",
 	"odh-pipeline-runtime-tensorflow-cuda-py312-ubi9-n":            "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_TENSORFLOW_CUDA_PY312_IMAGE",
-	"odh-pipeline-runtime-tensorflow-rocm-py312-ubi9-n":            "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_TENSORFLOW_ROCM_PY312_IMAGE",
 	"odh-pipeline-runtime-pytorch-cuda-py312-ubi9-n":               "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_PYTORCH_CUDA_PY312_IMAGE",
-	"odh-pipeline-runtime-pytorch-rocm-py312-ubi9-n":               "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_PYTORCH_ROCM_PY312_IMAGE",
 	"odh-pipeline-runtime-pytorch-llmcompressor-cuda-py312-ubi9-n": "RELATED_IMAGE_ODH_PIPELINE_RUNTIME_PYTORCH_LLMCOMPRESSOR_CUDA_PY312_IMAGE",
 
 	// Workspaces controller (gateway overlay). KUBE_RBAC_PROXY_IMAGE is the
